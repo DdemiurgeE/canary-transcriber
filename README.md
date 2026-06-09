@@ -8,6 +8,7 @@ A small native macOS SwiftUI app for batch transcription of existing audio files
 
 - Native macOS SwiftUI interface.
 - Select one or multiple audio/video files.
+- Add files with a file picker or drag and drop them into the file list.
 - Uses an external Python venv with profile-specific MLX packages.
 - Built-in model profiles:
   - `fast — Parakeet v3`: `mlx-community/parakeet-tdt-0.6b-v3` via `mlx-audio`.
@@ -75,7 +76,7 @@ If the DMG path is inconvenient, download `CanaryTranscriber.app.zip`, unzip it,
 
 1. Open **Canary Transcriber**.
 2. Confirm the `Python venv` field points to a Python where the selected profile runtime imports successfully.
-3. Add audio files with **Add files**.
+3. Add audio/video files with **Add files**, or drag and drop files directly into the file list.
 4. Choose a `Profile`:
    - `fast — Parakeet v3` for the default fast local STT path.
    - `fast — Whisper Turbo` for a fast Whisper-compatible path.

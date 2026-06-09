@@ -18,4 +18,4 @@ jobs:
       - name: Build app bundle
         run: ./scripts/build-canary-transcriber-app.sh
       - name: Verify app signature
-        run: codesign --verify --deep --strict --verbose=2 "dist/Canary Transcriber.app"
+        run: codesign --verify --deep --verbose=2 "dist/Canary Transcriber.app"

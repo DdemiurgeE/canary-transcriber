@@ -1,6 +1,7 @@
 import SwiftUI
 import Foundation
 import AppKit
+import UniformTypeIdentifiers
 
 @main
 struct CanaryTranscriberApp: App {
@@ -14,6 +15,7 @@ struct CanaryTranscriberApp: App {
             ContentView()
         }
         .windowStyle(.titleBar)
+        .defaultSize(width: 1120, height: 900)
     }
 }
 
@@ -64,6 +66,7 @@ struct ContentView: View {
     @State private var isRunning = false
     @State private var process: Process?
     @State private var currentConfigPath: String?
+    @State private var isFileDropTargeted = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -74,7 +77,7 @@ struct ContentView: View {
             logPanel
         }
         .padding(16)
-        .frame(minWidth: 980, minHeight: 760)
+        .frame(minWidth: 1080, idealWidth: 1120, minHeight: 820, idealHeight: 900)
         .onAppear { bringAppToFront() }
     }
 
@@ -240,24 +243,58 @@ struct ContentView: View {
                     Text("Выбрано: \(files.count)")
                         .foregroundStyle(.secondary)
                     Spacer()
+                    Text("Можно перетащить аудио/видео файлы сюда")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
-                List(selection: $selectedFileID) {
-                    ForEach(files) { item in
-                        HStack {
-                            Text(item.status)
-                                .font(.system(.caption, design: .monospaced))
-                                .frame(width: 90, alignment: .leading)
-                                .foregroundStyle(colorForStatus(item.status))
-                            Text(item.path)
-                                .font(.system(.body, design: .monospaced))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(isFileDropTargeted ? Color.accentColor.opacity(0.12) : Color.clear)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .strokeBorder(
+                                    isFileDropTargeted ? Color.accentColor : Color.secondary.opacity(files.isEmpty ? 0.45 : 0.15),
+                                    style: StrokeStyle(lineWidth: isFileDropTargeted ? 2 : 1, dash: files.isEmpty ? [6, 5] : [])
+                                )
+                        )
+
+                    List(selection: $selectedFileID) {
+                        ForEach(files) { item in
+                            HStack {
+                                Text(item.status)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .frame(width: 90, alignment: .leading)
+                                    .foregroundStyle(colorForStatus(item.status))
+                                Text(item.path)
+                                    .font(.system(.body, design: .monospaced))
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            .tag(item.id)
                         }
-                        .tag(item.id)
+                    }
+                    .opacity(files.isEmpty ? 0.35 : 1)
+                    .padding(4)
+
+                    if files.isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: "waveform.badge.plus")
+                                .font(.system(size: 34, weight: .semibold))
+                                .foregroundStyle(isFileDropTargeted ? Color.accentColor : Color.secondary)
+                            Text(isFileDropTargeted ? "Отпусти файлы, чтобы добавить" : "Перетащи сюда аудио/видео файлы")
+                                .font(.headline)
+                            Text("или нажми Add files")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(24)
+                        .allowsHitTesting(false)
                     }
                 }
-                .frame(minHeight: 220)
+                .frame(minHeight: 180, idealHeight: 210, maxHeight: 240)
+                .contentShape(Rectangle())
+                .onDrop(of: [.fileURL], isTargeted: $isFileDropTargeted, perform: handleFileDrop(providers:))
             }
             .padding(.vertical, 4)
         }
@@ -287,7 +324,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
-            .frame(minHeight: 260)
+            .frame(minHeight: 180, idealHeight: 220, maxHeight: .infinity)
             .padding(8)
             .background(Color(nsColor: .textBackgroundColor))
             .cornerRadius(8)
@@ -312,13 +349,88 @@ struct ContentView: View {
         panel.message = "Выбери аудиофайлы для транскрипции через Canary-MLX"
         if panel.runModal() == .OK {
             let newPaths = panel.urls.map { normalizeUserPath($0.standardizedFileURL.path) }
-            let existing = Set(files.map { $0.path })
-            let additions = newPaths
-                .filter { !existing.contains($0) }
-                .map { AudioFileItem(path: $0) }
-            files.append(contentsOf: additions)
-            logs += "Added files: \(additions.count)\n"
+            addAudioPaths(newPaths, source: "picker")
         }
+    }
+
+    private func handleFileDrop(providers: [NSItemProvider]) -> Bool {
+        guard !isRunning else {
+            logs += "⚠️ Нельзя добавлять файлы во время транскрибации.\n"
+            return false
+        }
+
+        let fileURLType = UTType.fileURL.identifier
+        let matchingProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(fileURLType) }
+        guard !matchingProviders.isEmpty else { return false }
+
+        for provider in matchingProviders {
+            provider.loadItem(forTypeIdentifier: fileURLType, options: nil) { item, error in
+                if let error {
+                    DispatchQueue.main.async {
+                        logs += "⚠️ Drop error: \(error.localizedDescription)\n"
+                    }
+                    return
+                }
+
+                guard let path = decodeDroppedFilePath(item) else {
+                    DispatchQueue.main.async {
+                        logs += "⚠️ Drop: не смог прочитать file URL.\n"
+                    }
+                    return
+                }
+
+                DispatchQueue.main.async {
+                    addAudioPaths([path], source: "drag&drop")
+                }
+            }
+        }
+        return true
+    }
+
+    private func decodeDroppedFilePath(_ item: NSSecureCoding?) -> String? {
+        if let url = item as? URL {
+            return normalizeUserPath(url.standardizedFileURL.path)
+        }
+        if let data = item as? Data,
+           let raw = String(data: data, encoding: .utf8),
+           let url = URL(string: raw.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return normalizeUserPath(url.standardizedFileURL.path)
+        }
+        if let string = item as? String,
+           let url = URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return normalizeUserPath(url.standardizedFileURL.path)
+        }
+        return nil
+    }
+
+    private func addAudioPaths(_ rawPaths: [String], source: String) {
+        let fm = FileManager.default
+        let existing = Set(files.map { $0.path })
+        var additions: [AudioFileItem] = []
+        var skippedDirectories = 0
+        var skippedDuplicates = 0
+
+        for rawPath in rawPaths {
+            let path = normalizeUserPath(rawPath)
+            var isDirectory: ObjCBool = false
+            if fm.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue {
+                skippedDirectories += 1
+                continue
+            }
+            if existing.contains(path) || additions.contains(where: { $0.path == path }) {
+                skippedDuplicates += 1
+                continue
+            }
+            additions.append(AudioFileItem(path: path))
+        }
+
+        if !additions.isEmpty {
+            files.append(contentsOf: additions)
+        }
+        logs += "Added files (\(source)): \(additions.count)"
+        if skippedDuplicates > 0 { logs += ", duplicates skipped: \(skippedDuplicates)" }
+        if skippedDirectories > 0 { logs += ", directories skipped: \(skippedDirectories)" }
+        logs += "\n"
     }
 
     private func choosePython() {
@@ -846,8 +958,22 @@ Persistent log: \(persistentLogPath())
     private func bringAppToFront() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             NSApplication.shared.activate(ignoringOtherApps: true)
-            NSApp.windows.first?.makeKeyAndOrderFront(nil)
-            NSApp.windows.first?.orderFrontRegardless()
+            guard let window = NSApp.windows.first else { return }
+            let minimumSize = NSSize(width: 1080, height: 820)
+            let preferredSize = NSSize(width: 1120, height: 900)
+            window.minSize = minimumSize
+            var frame = window.frame
+            if frame.width < minimumSize.width || frame.height < minimumSize.height {
+                let screenFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? frame
+                let newWidth = min(max(frame.width, preferredSize.width), screenFrame.width)
+                let newHeight = min(max(frame.height, preferredSize.height), screenFrame.height)
+                frame.size = NSSize(width: newWidth, height: newHeight)
+                frame.origin.x = screenFrame.midX - newWidth / 2
+                frame.origin.y = screenFrame.midY - newHeight / 2
+                window.setFrame(frame, display: true, animate: false)
+            }
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
         }
     }
 

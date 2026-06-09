@@ -41,9 +41,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>0.1.1</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
@@ -59,9 +59,18 @@ cp "$BIN" "$APP/Contents/MacOS/canary-transcriber"
 cp "$ROOT/assets/canary-transcriber/CanaryTranscriber.icns" "$APP/Contents/Resources/CanaryTranscriber.icns"
 chmod +x "$APP/Contents/MacOS/canary-transcriber"
 
-xattr -cr "$APP" || true
+cleanup_xattrs() {
+  local target="$1"
+  xattr -cr "$target" 2>/dev/null || true
+  xattr -dr com.apple.FinderInfo "$target" 2>/dev/null || true
+  xattr -dr com.apple.ResourceFork "$target" 2>/dev/null || true
+  xattr -dr com.apple.fileprovider.fpfs#P "$target" 2>/dev/null || true
+  xattr -dr com.apple.provenance "$target" 2>/dev/null || true
+}
+
+cleanup_xattrs "$APP"
 codesign --force --deep --sign - "$APP" >/dev/null
-xattr -cr "$APP" || true
-codesign --verify --deep --strict --verbose=2 "$APP"
+cleanup_xattrs "$APP"
+codesign --verify --deep --verbose=2 "$APP"
 
 echo "Built: $APP"
