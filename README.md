@@ -1,6 +1,6 @@
 # Canary Transcriber
 
-A small native macOS SwiftUI app for batch transcription of existing audio files with [`qfuxa/canary-mlx`](https://huggingface.co/qfuxa/canary-mlx).
+A small native macOS SwiftUI app for batch transcription of existing audio files with local MLX speech-to-text profiles.
 
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 
@@ -8,8 +8,13 @@ A small native macOS SwiftUI app for batch transcription of existing audio files
 
 - Native macOS SwiftUI interface.
 - Select one or multiple audio/video files.
-- Uses an external Python venv with `canary-mlx`.
-- Default model: `qfuxa/canary-mlx`.
+- Uses an external Python venv with profile-specific MLX packages.
+- Built-in model profiles:
+  - `fast — Parakeet v3`: `mlx-community/parakeet-tdt-0.6b-v3` via `mlx-audio`.
+  - `fast — Whisper Turbo`: `mlx-community/whisper-large-v3-turbo` via `mlx-whisper`.
+  - `accurate — Whisper large-v3`: `mlx-community/whisper-large-v3-mlx` via `mlx-whisper`.
+  - `multilingual European — Canary 1B v2`: `CogniSoftOrg/canary-1b-v2-mlx-bf16` via `mlx-audio`.
+  - `realtime — Voxtral Mini Realtime`: `mlx-community/Voxtral-Mini-4B-Realtime-2602-4bit` via `mlx-audio`.
 - Default language: `ru`.
 - Normalizes input with `ffmpeg` to 16 kHz mono PCM WAV.
 - Manual fixed-size chunking for long recordings to avoid empty output and MLX/Metal memory issues.
@@ -24,7 +29,7 @@ A small native macOS SwiftUI app for batch transcription of existing audio files
 - macOS 14 or newer.
 - Apple Silicon Mac recommended for MLX.
 - `ffmpeg` available on the system.
-- Python virtual environment with `canary-mlx` installed.
+- Python virtual environment with the runtime package for the selected profile installed.
 
 ### Install runtime dependencies
 
@@ -32,8 +37,10 @@ A small native macOS SwiftUI app for batch transcription of existing audio files
 brew install ffmpeg
 python3 -m venv ~/venvs/canary-mlx
 ~/venvs/canary-mlx/bin/python -m pip install --upgrade pip
-~/venvs/canary-mlx/bin/python -m pip install canary-mlx
+~/venvs/canary-mlx/bin/python -m pip install canary-mlx mlx-whisper 'mlx-audio[stt]'
 ```
+
+If you only use the legacy `qfuxa/canary-mlx` runtime, `canary-mlx` is enough. Parakeet/Canary v2/Voxtral profiles need `mlx-audio`; Whisper profiles need `mlx-whisper`.
 
 The app defaults to this Python path:
 
@@ -67,14 +74,21 @@ If the DMG path is inconvenient, download `CanaryTranscriber.app.zip`, unzip it,
 ## Usage
 
 1. Open **Canary Transcriber**.
-2. Confirm the `Python venv` field points to a Python where `canary-mlx` imports successfully.
+2. Confirm the `Python venv` field points to a Python where the selected profile runtime imports successfully.
 3. Add audio files with **Add files**.
-4. Keep defaults unless needed:
-   - `Model`: `qfuxa/canary-mlx`
+4. Choose a `Profile`:
+   - `fast — Parakeet v3` for the default fast local STT path.
+   - `fast — Whisper Turbo` for a fast Whisper-compatible path.
+   - `accurate — Whisper large-v3` for quality-first transcription.
+   - `multilingual European — Canary 1B v2` for Canary multilingual testing.
+   - `realtime — Voxtral Mini Realtime` for the realtime-oriented Voxtral model in batch-file mode.
+5. Keep defaults unless needed:
+   - `Model`: auto-filled by the profile, but editable.
+   - `Runtime`: auto-filled by the profile, but editable.
    - `Lang`: `ru`
    - `Chunk sec`: `30`
-5. Click **Transcribe**.
-6. Find outputs next to the source files or in the selected output folder.
+6. Click **Transcribe**.
+7. Find outputs next to the source files or in the selected output folder.
 
 For MLX/Metal memory errors, lower `Chunk sec` to `15` or `10`.
 
@@ -150,7 +164,7 @@ The app also sets a GUI-safe PATH for subprocesses:
 /opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 ```
 
-### Python is not executable / `canary_mlx` missing
+### Python is not executable / runtime package missing
 
 Verify your venv:
 
@@ -158,6 +172,20 @@ Verify your venv:
 /Users/pavelpalnikov/venvs/canary-mlx/bin/python - <<'PY'
 from canary_mlx import load_model
 print('canary_mlx import OK')
+PY
+```
+
+For other profiles, verify the matching package:
+
+```bash
+/Users/pavelpalnikov/venvs/canary-mlx/bin/python - <<'PY'
+import mlx_whisper
+print('mlx_whisper import OK')
+PY
+
+/Users/pavelpalnikov/venvs/canary-mlx/bin/python - <<'PY'
+import mlx_audio
+print('mlx_audio import OK')
 PY
 ```
 

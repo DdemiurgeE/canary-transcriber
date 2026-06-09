@@ -27,11 +27,23 @@ struct BatchConfig: Codable {
     let files: [String]
     let outputDir: String?
     let writeNextToSource: Bool
+    let profileID: String
+    let runtime: String
     let model: String
     let language: String
     let timestamps: Bool
     let chunkDuration: Double?
     let overlapDuration: Double
+}
+
+struct TranscriptionProfile: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let runtime: String
+    let model: String
+    let language: String
+    let chunkDuration: String
+    let details: String
 }
 
 struct ContentView: View {
@@ -40,7 +52,9 @@ struct ContentView: View {
     @State private var logs: String = "Готово. Добавь аудиофайлы и нажми Transcribe.\n"
 
     @State private var pythonPath: String = Self.defaultCanaryPythonPath()
-    @State private var model: String = "qfuxa/canary-mlx"
+    @State private var selectedProfileID: String = "multilingual-canary-v2"
+    @State private var runtime: String = "mlx_audio_cli"
+    @State private var model: String = "CogniSoftOrg/canary-1b-v2-mlx-bf16"
     @State private var language: String = "ru"
     @State private var chunkDuration: String = "30"
     @State private var timestamps: Bool = false
@@ -64,12 +78,66 @@ struct ContentView: View {
         .onAppear { bringAppToFront() }
     }
 
+    private var profiles: [TranscriptionProfile] {
+        [
+            TranscriptionProfile(
+                id: "fast-parakeet-v3",
+                title: "fast — Parakeet v3",
+                runtime: "mlx_audio_cli",
+                model: "mlx-community/parakeet-tdt-0.6b-v3",
+                language: "ru",
+                chunkDuration: "30",
+                details: "Быстрый MLX STT по умолчанию: NVIDIA Parakeet TDT 0.6B v3 через mlx-audio."
+            ),
+            TranscriptionProfile(
+                id: "fast-whisper-turbo",
+                title: "fast — Whisper Turbo",
+                runtime: "mlx_whisper",
+                model: "mlx-community/whisper-large-v3-turbo",
+                language: "ru",
+                chunkDuration: "30",
+                details: "Быстрый Whisper-compatible профиль через mlx-whisper."
+            ),
+            TranscriptionProfile(
+                id: "accurate-whisper-large-v3",
+                title: "accurate — Whisper large-v3",
+                runtime: "mlx_whisper",
+                model: "mlx-community/whisper-large-v3-mlx",
+                language: "ru",
+                chunkDuration: "30",
+                details: "Максимально проверенный universal baseline для качества и сложного аудио."
+            ),
+            TranscriptionProfile(
+                id: "multilingual-canary-v2",
+                title: "multilingual European — Canary 1B v2",
+                runtime: "mlx_audio_cli",
+                model: "CogniSoftOrg/canary-1b-v2-mlx-bf16",
+                language: "ru",
+                chunkDuration: "30",
+                details: "Canary 1B v2 для 25 европейских языков; ASR/translation test path через mlx-audio."
+            ),
+            TranscriptionProfile(
+                id: "realtime-voxtral-mini",
+                title: "realtime — Voxtral Mini Realtime",
+                runtime: "mlx_audio_cli",
+                model: "mlx-community/Voxtral-Mini-4B-Realtime-2602-4bit",
+                language: "ru",
+                chunkDuration: "30",
+                details: "Streaming/realtime-oriented модель; в этом batch UI запускается по файлам через mlx-audio."
+            )
+        ]
+    }
+
+    private var selectedProfile: TranscriptionProfile {
+        profiles.first(where: { $0.id == selectedProfileID }) ?? profiles[0]
+    }
+
     private var header: some View {
         HStack {
             VStack(alignment: .leading) {
-                Text("Canary-MLX Transcriber")
+                Text("Canary Transcriber")
                     .font(.title2).bold()
-                Text("Отдельное macOS GUI-приложение для транскрипции выбранных аудиофайлов через qfuxa/canary-mlx")
+                Text("macOS GUI для транскрипции выбранных аудиофайлов через MLX-профили: Parakeet, Whisper, Canary, Voxtral")
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -85,6 +153,26 @@ struct ContentView: View {
     private var settingsPanel: some View {
         GroupBox("Настройки") {
             VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top) {
+                    Text("Profile")
+                        .frame(width: 120, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Picker("Profile", selection: $selectedProfileID) {
+                            ForEach(profiles) { profile in
+                                Text(profile.title).tag(profile.id)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 360)
+                        .onChange(of: selectedProfileID) { applySelectedProfile() }
+
+                        Text(selectedProfile.details)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+
                 HStack {
                     Text("Python venv")
                         .frame(width: 120, alignment: .leading)
@@ -96,8 +184,17 @@ struct ContentView: View {
                 HStack {
                     Text("Model")
                         .frame(width: 120, alignment: .leading)
-                    TextField("qfuxa/canary-mlx", text: $model)
+                    TextField("model id", text: $model)
                         .textFieldStyle(.roundedBorder)
+
+                    Text("Runtime")
+                    Picker("Runtime", selection: $runtime) {
+                        Text("mlx-audio CLI").tag("mlx_audio_cli")
+                        Text("mlx-whisper").tag("mlx_whisper")
+                        Text("canary-mlx legacy").tag("canary_mlx")
+                    }
+                    .labelsHidden()
+                    .frame(width: 150)
 
                     Text("Lang")
                     TextField("ru", text: $language)
@@ -197,6 +294,15 @@ struct ContentView: View {
         }
     }
 
+    private func applySelectedProfile() {
+        let profile = selectedProfile
+        runtime = profile.runtime
+        model = profile.model
+        language = profile.language
+        chunkDuration = profile.chunkDuration
+        logs += "Profile selected: \(profile.title) → runtime=\(profile.runtime), model=\(profile.model)\n"
+    }
+
     private func chooseAudioFiles() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -281,8 +387,10 @@ struct ContentView: View {
             files: normalizedFiles.map { $0.path },
             outputDir: writeNextToSource ? nil : cleanOutput,
             writeNextToSource: writeNextToSource,
-            model: model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "qfuxa/canary-mlx" : model.trimmingCharacters(in: .whitespacesAndNewlines),
-            language: language.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "ru" : language.trimmingCharacters(in: .whitespacesAndNewlines),
+            profileID: selectedProfileID,
+            runtime: runtime,
+            model: model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedProfile.model : model.trimmingCharacters(in: .whitespacesAndNewlines),
+            language: language.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedProfile.language : language.trimmingCharacters(in: .whitespacesAndNewlines),
             timestamps: timestamps,
             chunkDuration: chunk <= 0 ? nil : chunk,
             overlapDuration: 2.0
@@ -313,14 +421,14 @@ import traceback
 import wave
 from pathlib import Path
 
-from canary_mlx import load_model
-
 try:
     cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     files = [Path(p).expanduser() for p in cfg["files"]]
     output_dir = Path(cfg["outputDir"]).expanduser() if cfg.get("outputDir") else None
     write_next_to_source = bool(cfg.get("writeNextToSource", True))
     model_id = cfg.get("model") or "qfuxa/canary-mlx"
+    runtime = cfg.get("runtime") or "canary_mlx"
+    profile_id = cfg.get("profileID") or "custom"
     language = cfg.get("language") or "ru"
     timestamps = bool(cfg.get("timestamps", False))
     chunk_duration = cfg.get("chunkDuration", 30.0)
@@ -387,16 +495,100 @@ try:
         print(f"Stage: prepared {len(chunks)} wav chunks; duration={duration:.1f}s chunk={chunk_seconds:.1f}s", flush=True)
         return chunks, duration, chunk_seconds
 
-    print(f"Stage: Canary preflight; files={len(files)}", flush=True)
+    def make_transcriber(runtime_name, model_name):
+        print(f"Stage: runtime preflight profile={profile_id} runtime={runtime_name} model={model_name}", flush=True)
+        if runtime_name == "canary_mlx":
+            try:
+                from canary_mlx import load_model
+            except Exception as exc:
+                raise RuntimeError("Python package canary-mlx is required for runtime=canary_mlx. Install: python -m pip install canary-mlx") from exc
+            print(f"Stage: load_model({model_name})", flush=True)
+            model_obj = load_model(model_name)
+            print("Stage: model loaded", flush=True)
+            def transcribe(path):
+                result = model_obj.transcribe(str(path), language=language, timestamps=timestamps)
+                return result.text if hasattr(result, "text") else str(result)
+            return transcribe
+
+        if runtime_name == "mlx_whisper":
+            try:
+                import mlx_whisper
+            except Exception as exc:
+                raise RuntimeError("Python package mlx-whisper is required for Whisper profiles. Install: python -m pip install mlx-whisper") from exc
+            print("Stage: mlx_whisper ready", flush=True)
+            def transcribe(path):
+                kwargs = {"path_or_hf_repo": model_name}
+                if language:
+                    kwargs["language"] = language
+                try:
+                    result = mlx_whisper.transcribe(str(path), **kwargs)
+                except TypeError:
+                    kwargs.pop("language", None)
+                    result = mlx_whisper.transcribe(str(path), **kwargs)
+                if isinstance(result, dict):
+                    return str(result.get("text", ""))
+                return result.text if hasattr(result, "text") else str(result)
+            return transcribe
+
+        if runtime_name == "mlx_audio_cli":
+            try:
+                import mlx_audio  # noqa: F401
+            except Exception as exc:
+                raise RuntimeError("Python package mlx-audio is required for Parakeet/Canary v2/Voxtral profiles. Install: python -m pip install 'mlx-audio[stt]' or python -m pip install mlx-audio") from exc
+            print("Stage: mlx_audio CLI ready", flush=True)
+            def transcribe(path):
+                with tempfile.TemporaryDirectory(prefix="mlx-audio-out-") as out_tmp:
+                    out_dir = Path(out_tmp)
+                    out_file = out_dir / "transcript.txt"
+                    cmd = [
+                        sys.executable, "-m", "mlx_audio.stt.generate",
+                        "--model", model_name,
+                        "--audio", str(path),
+                        "--output-path", str(out_file),
+                        "--format", "txt",
+                    ]
+                    if language:
+                        cmd.extend(["--language", language])
+                    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                    output = proc.stdout or ""
+                    if proc.returncode != 0:
+                        # Some mlx-audio versions do not accept --language; retry without it.
+                        if "--language" in cmd:
+                            cmd = [x for x in cmd if x not in ["--language", language]]
+                            proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                            output = proc.stdout or ""
+                    if proc.returncode != 0:
+                        raise RuntimeError(f"mlx-audio CLI failed with code {proc.returncode}: {output[-4000:]}")
+                    text_candidates = []
+                    for candidate in sorted(out_dir.rglob("*")):
+                        if candidate.is_file() and candidate.suffix.lower() in {".txt", ".text", ".md"}:
+                            text_candidates.append(candidate.read_text(encoding="utf-8", errors="ignore"))
+                        elif candidate.is_file() and candidate.suffix.lower() == ".json":
+                            try:
+                                data = json.loads(candidate.read_text(encoding="utf-8", errors="ignore"))
+                                if isinstance(data, dict):
+                                    for key in ["text", "transcription", "transcript"]:
+                                        if data.get(key):
+                                            text_candidates.append(str(data[key]))
+                            except Exception:
+                                pass
+                    joined = "\n".join(t.strip() for t in text_candidates if t.strip()).strip()
+                    if joined:
+                        return joined
+                    # Last resort: return stdout after removing event/progress noise.
+                    return "\n".join(line for line in output.splitlines() if line.strip() and not line.startswith("Stage:"))
+            return transcribe
+
+        raise RuntimeError(f"Unknown runtime: {runtime_name}. Supported: canary_mlx, mlx_whisper, mlx_audio_cli")
+
+    print(f"Stage: STT preflight; files={len(files)} profile={profile_id} runtime={runtime}", flush=True)
     for p in files:
         if not p.exists():
             raise FileNotFoundError(f"audio file not found: {p}")
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Stage: load_model({model_id})", flush=True)
-    model = load_model(model_id)
-    print("Stage: model loaded", flush=True)
+    transcribe_chunk = make_transcriber(runtime, model_id)
 
     ok = 0
     failed = 0
@@ -410,9 +602,8 @@ try:
             with tempfile.TemporaryDirectory(prefix="canary-transcriber-") as tmp:
                 chunks, duration, effective_chunk = make_wav_chunks(audio_path, Path(tmp), chunk_duration)
                 for chunk_index, chunk_start, chunk_path in chunks:
-                    print(f"Stage: Canary chunk {chunk_index + 1}/{len(chunks)} start={chunk_start:.1f}s", flush=True)
-                    result = model.transcribe(str(chunk_path), language=language, timestamps=timestamps)
-                    chunk_text = result.text if hasattr(result, "text") else str(result)
+                    print(f"Stage: STT chunk {chunk_index + 1}/{len(chunks)} start={chunk_start:.1f}s runtime={runtime}", flush=True)
+                    chunk_text = transcribe_chunk(chunk_path)
                     chunk_text = chunk_text.strip()
                     if chunk_text:
                         parts.append(chunk_text)
@@ -428,6 +619,8 @@ try:
             txt_path.write_text(text, encoding="utf-8")
             payload = {
                 "audio": str(audio_path),
+                "profile": profile_id,
+                "runtime": runtime,
                 "model": model_id,
                 "language": language,
                 "timestamps": timestamps,
@@ -442,11 +635,11 @@ try:
             emit("file_done", path=str(audio_path), txt=str(txt_path), json=str(json_path), chars=len(text))
             print(f"Transcript saved: {txt_path} (chars={len(text)})", flush=True)
             if len(text.strip()) == 0:
-                print("Warning: Canary returned empty text for this file. Check language/audio format or try WAV conversion.", flush=True)
+                print("Warning: selected STT profile returned empty text for this file. Check runtime dependencies, language/audio format, or try another profile.", flush=True)
         except RuntimeError as e:
             msg = str(e)
             if "Insufficient Memory" in msg or "OutOfMemory" in msg or "out of memory" in msg.lower():
-                msg = "Canary/MLX ran out of Metal memory. Try smaller Chunk sec, e.g. 15 or 10. Original: " + msg
+                msg = "MLX runtime ran out of Metal memory. Try smaller Chunk sec, e.g. 15 or 10. Original: " + msg
             failed += 1
             emit("file_failed", path=str(audio_path), error=msg)
             print(f"ERROR transcribing {audio_path}: {msg}", flush=True)
@@ -486,8 +679,10 @@ except Exception as e:
 
         let batchHeader = """
 
-=== Canary-MLX batch transcription ===
+=== MLX batch transcription ===
 Python: \(pythonPath)
+Profile: \(config.profileID)
+Runtime: \(config.runtime)
 Model: \(config.model)
 Language: \(config.language)
 Chunk duration: \(config.chunkDuration.map { String($0) } ?? "off")
