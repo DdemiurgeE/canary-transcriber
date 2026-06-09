@@ -2,8 +2,6 @@
 
 A small native macOS SwiftUI app for batch transcription of existing audio files with [`qfuxa/canary-mlx`](https://huggingface.co/qfuxa/canary-mlx).
 
-The app is intentionally separate from Summasound: it only does **file → transcript** with Canary-MLX.
-
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 
 ## Features
