@@ -1,0 +1,12 @@
+.build/
+dist/
+DerivedData/
+.swiftpm/
+.DS_Store
+*.xcuserdata
+*.xcuserstate
+*.dSYM/
+*.log
+.env
+.env.*
+!.env.example
