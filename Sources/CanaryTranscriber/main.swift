@@ -660,7 +660,16 @@ try:
                         "--format", "txt",
                     ]
                     if language:
+                        # mlx-audio's CLI exposes --language, but generative Canary models
+                        # use source_lang/target_lang instead. The CLI filters kwargs by
+                        # model.generate signature, so language alone is silently dropped for
+                        # Canary v2 and defaults to en->en. Pass both paths: Whisper-like or
+                        # Parakeet-like models may use/ignore --language, while Canary v2 gets
+                        # explicit ru->ru ASR instead of translation to English.
                         cmd.extend(["--language", language])
+                        lang_kwargs = json.dumps({"source_lang": language, "target_lang": language}, ensure_ascii=False)
+                        cmd.extend(["--gen-kwargs", lang_kwargs])
+                    print("Stage: mlx-audio command language=" + str(language) + " gen_kwargs=" + (lang_kwargs if language else "{}"), flush=True)
                     proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                     output = proc.stdout or ""
                     if proc.returncode != 0:
