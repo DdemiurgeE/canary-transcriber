@@ -82,6 +82,43 @@ enum DependencyStatus {
     case downloading
 }
 
+struct FastTooltipModifier: ViewModifier {
+    let text: String
+    @State private var show = false
+    private let delay: Double = 0.35
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .bottom) {
+                if show {
+                    Text(text)
+                        .font(.caption)
+                        .padding(6)
+                        .background(.regularMaterial)
+                        .cornerRadius(4)
+                        .fixedSize()
+                        .offset(y: 32)
+                        .transition(.opacity.animation(.easeInOut(duration: 0.1)))
+                }
+            }
+            .onHover { hovering in
+                if hovering {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        show = true
+                    }
+                } else {
+                    show = false
+                }
+            }
+    }
+}
+
+extension View {
+    func fastTooltip(_ text: String) -> some View {
+        modifier(FastTooltipModifier(text: text))
+    }
+}
+
 final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutput, SCStreamDelegate {
     @Published private(set) var isRecording = false
 
@@ -796,31 +833,30 @@ struct ContentView: View {
                     HStack(spacing: 4) {
                         Button(action: { startAppAudioCapture(withMic: false) }) {
                             Image(systemName: "app.badge")
+                                .font(.title)
                         }
-                        .help("Record app audio only (no microphone)")
+                        .fastTooltip("Record app audio only (no microphone)")
                         .disabled(appAudioCapture.isRecording || isRunning || selectedCaptureApp == nil)
 
                         Button(action: { startAppAudioCapture(withMic: true) }) {
                             Image(systemName: "waveform.badge.mic")
+                                .font(.title)
                         }
-                        .help("Record app audio + microphone")
+                        .fastTooltip("Record app audio + microphone")
                         .disabled(appAudioCapture.isRecording || isRunning || selectedCaptureApp == nil)
 
                         Button(action: { stopAppAudioCapture() }) {
                             Image(systemName: "stop.fill")
+                                .font(.title)
                         }
-                        .help("Stop recording")
+                        .fastTooltip("Stop recording")
                         .disabled(!appAudioCapture.isRecording)
                     }
                     .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+                    .controlSize(.large)
                 }
 
                 HStack(spacing: 8) {
-                    Toggle("Include microphone and mix with app audio after stop", isOn: $captureMicrophone)
-                        .toggleStyle(.checkbox)
-                        .disabled(appAudioCapture.isRecording || isRunning)
-
                     Picker("Microphone", selection: $selectedMicrophoneID) {
                         Text(microphoneDevices.isEmpty ? "System default microphone" : "System default microphone").tag(Optional<MicrophoneDeviceTarget.ID>.none)
                         ForEach(microphoneDevices) { mic in
