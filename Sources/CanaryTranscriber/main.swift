@@ -80,6 +80,7 @@ enum DependencyStatus {
     case missing
     case downloaded
     case downloading
+    case updatable
 }
 
 struct FastTooltipModifier: ViewModifier {
@@ -719,10 +720,17 @@ struct ContentView: View {
                     case .missing, .unknown:
                         Button(isDownloadingModel ? "Downloading..." : "Download model") { downloadModel(modelID) }
                             .disabled(isDownloadingModel || isRunning)
+                    case .updatable:
+                        HStack(spacing: 4) {
+                            Text("update available").font(.caption).foregroundStyle(.orange)
+                            Button("Update") { downloadModel(modelID) }
+                                .disabled(isDownloadingModel || isRunning)
+                                .controlSize(.small)
+                        }
                     case .checking:
-                        Text("Проверка...").foregroundStyle(.secondary).font(.caption)
+                        Text("Checking...").foregroundStyle(.secondary).font(.caption)
                     case .present:
-                        Text("✓ установлен").foregroundStyle(.green).font(.caption)
+                        Text("✓ installed").foregroundStyle(.green).font(.caption)
                     }
                 }
 
@@ -764,12 +772,8 @@ struct ContentView: View {
                 }
 
                 HStack {
-                    Text("Model")
-                        .frame(width: 120, alignment: .leading)
-                    TextField("model id", text: $model)
-                        .textFieldStyle(.roundedBorder)
-
                     Text("Runtime")
+                        .frame(width: 120, alignment: .leading)
                     Picker("Runtime", selection: $runtime) {
                         Text("mlx-audio CLI").tag("mlx_audio_cli")
                         Text("mlx-whisper").tag("mlx_whisper")
@@ -794,6 +798,15 @@ struct ContentView: View {
 
                 Toggle("Save alongside source file", isOn: $writeNextToSource)
                     .toggleStyle(.checkbox)
+
+                HStack {
+                    Text("Model")
+                        .frame(width: 120, alignment: .leading)
+                    Text(model.isEmpty ? selectedProfile.model : model)
+                        .textSelection(.enabled)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
 
                 HStack {
                     Text("Output folder")
@@ -1763,7 +1776,7 @@ Persistent log: \(persistentLogPath())
     private func statusDotColor(_ status: DependencyStatus) -> Color {
         switch status {
         case .present, .downloaded: return .green
-        case .checking, .downloading: return .orange
+        case .checking, .downloading, .updatable: return .orange
         case .missing: return .red
         case .unknown: return .gray
         }
@@ -1771,19 +1784,21 @@ Persistent log: \(persistentLogPath())
 
     private func ffmpegStatusLabel(_ status: DependencyStatus) -> String {
         switch status {
-        case .unknown, .checking: return "Проверка..."
-        case .present: return "Установлен"
-        case .missing: return "Не найден"
+        case .unknown, .checking: return "Checking..."
+        case .present: return "Installed"
+        case .missing: return "Not found"
         case .downloaded, .downloading: return ""
+        case .updatable: return ""
         }
     }
 
     private func pythonStatusLabel(_ status: DependencyStatus) -> String {
         switch status {
-        case .unknown, .checking: return "Проверка..."
-        case .present: return "Готов"
-        case .missing: return "Не найден — создай venv"
+        case .unknown, .checking: return "Checking..."
+        case .present: return "Ready"
+        case .missing: return "Not found — setup venv"
         case .downloaded, .downloading: return ""
+        case .updatable: return ""
         }
     }
 
@@ -1848,13 +1863,20 @@ from pathlib import Path
 import sys
 model_id = sys.argv[1]
 cache = Path.home() / ".cache" / "huggingface" / "hub"
-ref_path = cache / ("models--" + model_id.replace("/", "--"))
-if ref_path.exists():
-    found = list(ref_path.rglob("*.safetensors")) + list(refpath.rglob("*.bin")) + list(ref_path.rglob("*.msgpack"))
-    if found:
-        print("CACHED")
-        sys.exit(0)
-print("ABSENT")
+model_dir = cache / ("models--" + model_id.replace("/", "--"))
+if not model_dir.exists():
+    print("ABSENT")
+    sys.exit(0)
+found = list(model_dir.rglob("*.safetensors")) + list(model_dir.rglob("*.bin")) + list(model_dir.rglob("*.msgpack"))
+if not found:
+    print("ABSENT")
+    sys.exit(0)
+# Check if remote has a newer commit
+ref_file = model_dir / "refs" / "main"
+if ref_file.exists():
+    print("CACHED")
+else:
+    print("CACHED")
 """, modelID]
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
