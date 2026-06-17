@@ -341,14 +341,14 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
                 if includeMicrophone {
                     let micLabel = microphoneDeviceID?.isEmpty == false ? microphoneDeviceID! : "system default"
                     onLog("🎤 Microphone capture enabled via AVAudioEngine (device=\(micLabel)) → \(micURL.path)\n")
-                    onLog("   После Stop app+mic будут сведены через ffmpeg в \(mixedURL.lastPathComponent).\n")
+                    onLog("   After Stop, app + mic will be mixed via ffmpeg into \(mixedURL.lastPathComponent).\n")
                 }
-                onLog("   macOS может запросить Screen Recording/System Audio Recording и Microphone permissions для Canary Transcriber.\n")
+                onLog("   macOS may request Screen Recording and Microphone permissions for Canary Transcriber.\n")
             }
         } catch {
             cleanupAfterFailure()
             await MainActor.run {
-                onLog("❌ Не удалось стартовать app audio capture: \(error.localizedDescription)\n")
+                onLog("❌ Failed to start app audio capture: \(error.localizedDescription)\n")
                 onFinished(.failure(error))
             }
         }
@@ -423,9 +423,9 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
                                 finalResult = .failure(error)
                             }
                         case .failure(let error):
-                            finalResult = .failure(NSError(domain: "CanaryAppAudioCapture", code: 7, userInfo: [NSLocalizedDescriptionKey: "Звук приложения записан, но микрофон не записался: \(error.localizedDescription). Проверь Microphone permission для Canary Transcriber."]))
+                            finalResult = .failure(NSError(domain: "CanaryAppAudioCapture", code: 7, userInfo: [NSLocalizedDescriptionKey: "App audio recorded, but microphone did not record: \(error.localizedDescription). Check Microphone permission for Canary Transcriber."]))
                         case .none:
-                            finalResult = .failure(NSError(domain: "CanaryAppAudioCapture", code: 8, userInfo: [NSLocalizedDescriptionKey: "Микрофон был включён, но mic writer не вернул результат."]))
+                            finalResult = .failure(NSError(domain: "CanaryAppAudioCapture", code: 8, userInfo: [NSLocalizedDescriptionKey: "Microphone was enabled but the writer returned no result."]))
                         }
                     } else {
                         finalResult = .success(appURL)
@@ -433,7 +433,7 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
                 case .failure(let error):
                     finalResult = .failure(error)
                 case .none:
-                    finalResult = .failure(NSError(domain: "CanaryAppAudioCapture", code: 9, userInfo: [NSLocalizedDescriptionKey: "App audio writer не вернул результат."]))
+                    finalResult = .failure(NSError(domain: "CanaryAppAudioCapture", code: 9, userInfo: [NSLocalizedDescriptionKey: "App audio writer returned no result."]))
                 }
 
                 DispatchQueue.main.async {
@@ -473,10 +473,10 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         let output = String(data: data, encoding: .utf8) ?? ""
         guard proc.terminationStatus == 0 else {
-            throw NSError(domain: "CanaryAppAudioCapture", code: 10, userInfo: [NSLocalizedDescriptionKey: "ffmpeg не смог свести app audio и микрофон (code \(proc.terminationStatus)): \(output.suffix(2000))"])
+            throw NSError(domain: "CanaryAppAudioCapture", code: 10, userInfo: [NSLocalizedDescriptionKey: "ffmpeg could not mix app audio and microphone (code \(proc.terminationStatus)): \(output.suffix(2000))"])
         }
         guard RealtimeAudioFileWriter.isUsableAudioFile(outputURL) else {
-            throw NSError(domain: "CanaryAppAudioCapture", code: 11, userInfo: [NSLocalizedDescriptionKey: "ffmpeg создал пустой/слишком маленький mixed-файл: \(outputURL.path)"])
+            throw NSError(domain: "CanaryAppAudioCapture", code: 11, userInfo: [NSLocalizedDescriptionKey: "ffmpeg produced an empty/too-small mixed file: \(outputURL.path)"])
         }
         return outputURL
     }
@@ -511,7 +511,7 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
 struct ContentView: View {
     @State private var files: [AudioFileItem] = []
     @State private var selectedFileID: AudioFileItem.ID?
-    @State private var logs: String = "Готово. Добавь аудиофайлы и нажми Transcribe.\n"
+    @State private var logs: String = "Ready. Add audio files and click Transcribe.\n"
 
     @State private var pythonPath: String = Self.defaultCanaryPythonPath()
     @State private var selectedProfileID: String = "multilingual-canary-v2"
@@ -620,24 +620,19 @@ struct ContentView: View {
 
     private var header: some View {
         HStack {
-            VStack(alignment: .leading) {
-                Text("Canary Transcriber")
-                    .font(.title2).bold()
-                Text("macOS GUI для транскрипции выбранных аудиофайлов через MLX-профили: Parakeet, Whisper, Canary, Voxtral")
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
             if isRunning {
+                Spacer()
                 ProgressView()
                     .controlSize(.small)
                 Text("running")
                     .foregroundStyle(.secondary)
             }
         }
+        .frame(height: 20)
     }
 
     private var dependencyPanel: some View {
-        GroupBox("Зависимости и модели") {
+        GroupBox("Dependencies & Models") {
             VStack(alignment: .leading, spacing: 8) {
                 // ffmpeg
                 HStack(spacing: 8) {
@@ -694,14 +689,14 @@ struct ContentView: View {
                     }
                 }
 
-                Text("Нажми Refresh, чтобы перепроверить. Зависимости запускают brew / pip / venv; модель скачивается через HuggingFace Hub.").font(.caption).foregroundStyle(.secondary)
+                Text("Click Refresh to recheck. Dependencies: brew / pip / venv. Models download from HuggingFace Hub.").font(.caption).foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
         }
     }
 
     private var settingsPanel: some View {
-        GroupBox("Настройки") {
+        GroupBox("Settings") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
                     Text("Profile")
@@ -760,7 +755,7 @@ struct ContentView: View {
                         .toggleStyle(.checkbox)
                 }
 
-                Toggle("Сохранять транскрипт рядом с исходным файлом", isOn: $writeNextToSource)
+                Toggle("Save alongside source file", isOn: $writeNextToSource)
                     .toggleStyle(.checkbox)
 
                 HStack {
@@ -780,33 +775,49 @@ struct ContentView: View {
 
 
     private var appCapturePanel: some View {
-        GroupBox("Захват аудио приложения — ScreenCaptureKit") {
+        GroupBox("App Audio Capture — ScreenCaptureKit") {
             VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
-                    Text("Application")
-                        .frame(width: 120, alignment: .leading)
+                HStack(spacing: 8) {
                     Picker("Application", selection: $selectedCaptureAppID) {
-                        Text(captureApps.isEmpty ? "Нажми Refresh apps" : "Выбери приложение").tag(Optional<CaptureAppTarget.ID>.none)
+                        Text(captureApps.isEmpty ? "Press Refresh apps" : "Select an application").tag(Optional<CaptureAppTarget.ID>.none)
                         ForEach(captureApps) { app in
                             Text(app.title).tag(Optional(app.id))
                         }
                     }
                     .labelsHidden()
-                    .frame(maxWidth: 520)
+                    .frame(maxWidth: 400)
                     .disabled(appAudioCapture.isRecording || isRunning)
 
                     Button(isRefreshingCaptureApps ? "Refreshing..." : "Refresh apps") { refreshCaptureApps() }
                         .disabled(isRefreshingCaptureApps || appAudioCapture.isRecording || isRunning)
 
-                    Button(appAudioCapture.isRecording ? "Recording..." : "Record app + mic") { startAppAudioCapture() }
+                    Spacer()
+
+                    HStack(spacing: 4) {
+                        Button(action: { startAppAudioCapture(withMic: false) }) {
+                            Image(systemName: "app.badge")
+                        }
+                        .help("Record app audio only (no microphone)")
                         .disabled(appAudioCapture.isRecording || isRunning || selectedCaptureApp == nil)
 
-                    Button("Stop recording") { stopAppAudioCapture() }
+                        Button(action: { startAppAudioCapture(withMic: true) }) {
+                            Image(systemName: "waveform.badge.mic")
+                        }
+                        .help("Record app audio + microphone")
+                        .disabled(appAudioCapture.isRecording || isRunning || selectedCaptureApp == nil)
+
+                        Button(action: { stopAppAudioCapture() }) {
+                            Image(systemName: "stop.fill")
+                        }
+                        .help("Stop recording")
                         .disabled(!appAudioCapture.isRecording)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
                 }
 
                 HStack(spacing: 8) {
-                    Toggle("Добавлять мой микрофон и сводить app + mic в один файл", isOn: $captureMicrophone)
+                    Toggle("Include microphone and mix with app audio after stop", isOn: $captureMicrophone)
                         .toggleStyle(.checkbox)
                         .disabled(appAudioCapture.isRecording || isRunning)
 
@@ -823,16 +834,13 @@ struct ContentView: View {
                         .disabled(appAudioCapture.isRecording || isRunning)
                 }
 
-                Text("Пишет звук выбранного приложения через ScreenCaptureKit. Если включён микрофон, пишет выбранный Microphone device и после Stop сводит app+mic через ffmpeg в conference-audio-*.m4a, который добавляется в очередь. Требуются Screen Recording/System Audio Recording и Microphone permissions; наушники не мешают, потому что app audio захватывается до вывода на устройство.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
         }
     }
 
     private var filePanel: some View {
-        GroupBox("Файлы") {
+        GroupBox("Files") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Button("Add files") { chooseAudioFiles() }
@@ -841,10 +849,10 @@ struct ContentView: View {
                         .disabled(isRunning || selectedFileID == nil)
                     Button("Clear list") { files.removeAll() }
                         .disabled(isRunning || files.isEmpty)
-                    Text("Выбрано: \(files.count)")
+                    Text("Selected: \(files.count)")
                         .foregroundStyle(.secondary)
                     Spacer()
-                    Text("Можно перетащить аудио/видео файлы сюда")
+                    Text("Drag & drop audio/video files here")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -883,9 +891,9 @@ struct ContentView: View {
                             Image(systemName: "waveform.badge.plus")
                                 .font(.system(size: 34, weight: .semibold))
                                 .foregroundStyle(isFileDropTargeted ? Color.accentColor : Color.secondary)
-                            Text(isFileDropTargeted ? "Отпусти файлы, чтобы добавить" : "Перетащи сюда аудио/видео файлы")
+                            Text(isFileDropTargeted ? "Release to add files" : "Drop audio/video files here")
                                 .font(.headline)
-                            Text("или нажми Add files")
+                            Text("or click Add files")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -917,7 +925,7 @@ struct ContentView: View {
 
     private var logPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Логи")
+            Text("Log")
                 .font(.headline)
             ScrollView {
                 Text(logs)
@@ -980,21 +988,22 @@ struct ContentView: View {
             } catch {
                 await MainActor.run {
                     self.logs += "❌ Cannot refresh app list: \(error.localizedDescription)\n"
-                    self.logs += "   Проверь System Settings → Privacy & Security → Screen & System Audio Recording / Screen Recording для Canary Transcriber.\n"
+                    self.logs += "⚠️ Check System Settings → Privacy & Security → Screen Recording for Canary Transcriber.\n"
                     self.isRefreshingCaptureApps = false
                 }
             }
         }
     }
 
-    private func startAppAudioCapture() {
+    private func startAppAudioCapture(withMic: Bool = true) {
         guard let target = selectedCaptureApp else {
-            logs += "⚠️ Сначала выбери приложение для захвата.\n"
+            logs += "⚠️ Select an application first.\n"
             return
         }
         let captureDir = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Documents/CanaryTranscripts/AppAudioCaptures", isDirectory: true)
         let micLabel = captureMicrophone ? (selectedMicrophone?.title ?? "system default") : "off"
+        captureMicrophone = withMic
         logs += "Stage: start app audio capture for \(target.title); microphone=\(micLabel)\n"
         Task {
             await appAudioCapture.start(target: target, includeMicrophone: captureMicrophone, microphoneDeviceID: selectedMicrophoneID, outputDirectory: captureDir, onLog: { text in
@@ -1035,7 +1044,7 @@ struct ContentView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         panel.allowedContentTypes = []
-        panel.message = "Выбери аудиофайлы для транскрипции через Canary-MLX"
+        panel.message = "Select audio/video files for Canary Transcriber"
         if panel.runModal() == .OK {
             let newPaths = panel.urls.map { normalizeUserPath($0.standardizedFileURL.path) }
             addAudioPaths(newPaths, source: "picker")
@@ -1044,7 +1053,7 @@ struct ContentView: View {
 
     private func handleFileDrop(providers: [NSItemProvider]) -> Bool {
         guard !isRunning else {
-            logs += "⚠️ Нельзя добавлять файлы во время транскрибации.\n"
+            logs += "⚠️ Cannot add files during transcription.\n"
             return false
         }
 
@@ -1063,7 +1072,7 @@ struct ContentView: View {
 
                 guard let path = decodeDroppedFilePath(item) else {
                     DispatchQueue.main.async {
-                        logs += "⚠️ Drop: не смог прочитать file URL.\n"
+                        logs += "⚠️ Drop: could not read file URL.\n"
                     }
                     return
                 }
@@ -1157,7 +1166,7 @@ struct ContentView: View {
         pythonPath = cleanPython
         guard FileManager.default.isExecutableFile(atPath: cleanPython) else {
             logs += "❌ Python is not executable: \(cleanPython)\n"
-            logs += "   Укажи venv с canary-mlx, например /Users/pavelpalnikov/venvs/canary-mlx/bin/python\n"
+            logs += "   Set the Python venv path, e.g. /Users/pavelpalnikov/venvs/canary-mlx/bin/python\n"
             return
         }
 
@@ -1167,7 +1176,7 @@ struct ContentView: View {
         files = normalizedFiles
         let missing = normalizedFiles.filter { !FileManager.default.fileExists(atPath: $0.path) }
         if !missing.isEmpty {
-            logs += "❌ Не найдены файлы:\n"
+            logs += "❌ Files not found:\n"
             for item in missing { logs += "   \(item.path)\n" }
             return
         }
@@ -1514,14 +1523,14 @@ Persistent log: \(persistentLogPath())
                     self.currentConfigPath = nil
                 }
                 if finished.terminationStatus == 0 {
-                    self.logs += "\n✅ Batch завершён успешно.\n"
-                    self.appendPersistentLog("\n✅ Batch завершён успешно.\n")
+                    self.logs += "\n✅ Batch completed successfully.\n"
+                    self.appendPersistentLog("\n✅ Batch completed successfully.\n")
                 } else if finished.terminationStatus == 15 {
-                    self.logs += "\n⏹️ Batch остановлен пользователем.\n"
-                    self.appendPersistentLog("\n⏹️ Batch остановлен пользователем.\n")
+                    self.logs += "\n⏹️ Batch stopped by user.\n"
+                    self.appendPersistentLog("\n⏹️ Batch stopped by user.\n")
                 } else {
                     let reason = String(describing: finished.terminationReason)
-                    let message = "\n⚠️ Batch завершился с ошибками (code \(finished.terminationStatus), reason \(reason)).\n"
+                    let message = "\n⚠️ Batch completed with errors (code \(finished.terminationStatus), reason \(reason)).\n"
                     self.logs += message
                     self.appendPersistentLog(message)
                 }
