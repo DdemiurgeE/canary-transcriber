@@ -8,24 +8,21 @@ import ScreenCaptureKit
 
 @main
 struct CanaryTranscriberApp: App {
-    init() {
-        NSApplication.shared.setActivationPolicy(.regular)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-    }
-
     var body: some Scene {
         WindowGroup {
             ContentView()
         }
-        .windowStyle(.titleBar)
-        .defaultSize(width: 1120, height: 900)
+        .windowResizability(.contentMinSize)
     }
 }
 
 struct AudioFileItem: Identifiable, Hashable {
     let id = UUID()
-    var path: String
-    var status: String = "queued"
+    let path: String
+    var status: String = "pending"
+
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+    static func == (lhs: AudioFileItem, rhs: AudioFileItem) -> Bool { lhs.id == rhs.id }
 }
 
 struct BatchConfig: Codable {
@@ -74,6 +71,15 @@ struct MicrophoneDeviceTarget: Identifiable, Hashable {
         let vendor = manufacturer.isEmpty ? "" : " — \(manufacturer)"
         return "\(name)\(vendor)"
     }
+}
+
+enum DependencyStatus {
+    case unknown
+    case checking
+    case present
+    case missing
+    case downloaded
+    case downloading
 }
 
 final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutput, SCStreamDelegate {
@@ -370,7 +376,6 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
         }
     }
 
-
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         onLog?("⚠️ ScreenCaptureKit stream stopped with error: \(error.localizedDescription)\n")
         stop()
@@ -531,9 +536,18 @@ struct ContentView: View {
     @State private var microphoneDevices: [MicrophoneDeviceTarget] = []
     @State private var selectedMicrophoneID: MicrophoneDeviceTarget.ID?
 
+    // Dependencies & models
+    @State private var ffmpegStatus: DependencyStatus = .unknown
+    @State private var pythonStatus: DependencyStatus = .unknown
+    @State private var modelDownloadStatus: [String: DependencyStatus] = [:]
+    @State private var isInstallingFFmpeg = false
+    @State private var isSettingUpPython = false
+    @State private var isDownloadingModel = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            dependencyPanel
             settingsPanel
             appCapturePanel
             filePanel
@@ -546,6 +560,7 @@ struct ContentView: View {
             bringAppToFront()
             refreshCaptureApps()
             refreshMicrophones()
+            checkDependencies()
         }
     }
 
@@ -618,6 +633,70 @@ struct ContentView: View {
                 Text("running")
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var dependencyPanel: some View {
+        GroupBox("Зависимости и модели") {
+            VStack(alignment: .leading, spacing: 8) {
+                // ffmpeg
+                HStack(spacing: 8) {
+                    statusDot(ffmpegStatus)
+                    Text("ffmpeg").frame(width: 90, alignment: .leading)
+                    Text(ffmpegStatusLabel(ffmpegStatus)).foregroundStyle(.secondary)
+                    Spacer()
+                    switch ffmpegStatus {
+                    case .missing:
+                        Button(isInstallingFFmpeg ? "Installing..." : "Install ffmpeg") { installFFmpeg() }
+                            .disabled(isInstallingFFmpeg)
+                    default:
+                        EmptyView()
+                    }
+                }
+
+                // Python venv
+                HStack(spacing: 8) {
+                    statusDot(pythonStatus)
+                    Text("Python venv").frame(width: 90, alignment: .leading)
+                    Text(pythonStatusLabel(pythonStatus)).foregroundStyle(.secondary)
+                    Spacer()
+                    switch pythonStatus {
+                    case .missing:
+                        Button(isSettingUpPython ? "Setting up..." : "Setup venv") { setupPythonEnvironment() }
+                            .disabled(isSettingUpPython || isRunning)
+                    default:
+                        EmptyView()
+                    }
+                }
+
+                Divider()
+
+                // Selected model
+                let modelID = model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedProfile.model : model.trimmingCharacters(in: .whitespacesAndNewlines)
+                let modelStatus = modelDownloadStatus[modelID] ?? .unknown
+                HStack(spacing: 8) {
+                    statusDot(modelStatus)
+                    Text("Model").frame(width: 90, alignment: .leading)
+                    Text(modelID).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                    Spacer()
+                    switch modelStatus {
+                    case .downloaded:
+                        Text("✓ cached").foregroundStyle(.green).font(.caption)
+                    case .downloading:
+                        ProgressView().controlSize(.small)
+                    case .missing, .unknown:
+                        Button(isDownloadingModel ? "Downloading..." : "Download model") { downloadModel(modelID) }
+                            .disabled(isDownloadingModel || isRunning)
+                    case .checking:
+                        Text("Проверка...").foregroundStyle(.secondary).font(.caption)
+                    case .present:
+                        Text("✓ установлен").foregroundStyle(.green).font(.caption)
+                    }
+                }
+
+                Text("Нажми Refresh, чтобы перепроверить. Зависимости запускают brew / pip / venv; модель скачивается через HuggingFace Hub.").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
         }
     }
 
@@ -1270,12 +1349,6 @@ try:
                         "--format", "txt",
                     ]
                     if language:
-                        # mlx-audio's CLI exposes --language, but generative Canary models
-                        # use source_lang/target_lang instead. The CLI filters kwargs by
-                        # model.generate signature, so language alone is silently dropped for
-                        # Canary v2 and defaults to en->en. Pass both paths: Whisper-like or
-                        # Parakeet-like models may use/ignore --language, while Canary v2 gets
-                        # explicit ru->ru ASR instead of translation to English.
                         cmd.extend(["--language", language])
                         lang_kwargs = json.dumps({"source_lang": language, "target_lang": language}, ensure_ascii=False)
                         cmd.extend(["--gen-kwargs", lang_kwargs])
@@ -1283,7 +1356,6 @@ try:
                     proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                     output = proc.stdout or ""
                     if proc.returncode != 0:
-                        # Some mlx-audio versions do not accept --language; retry without it.
                         if "--language" in cmd:
                             cmd = [x for x in cmd if x not in ["--language", language]]
                             proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -1306,7 +1378,6 @@ try:
                     joined = "\n".join(t.strip() for t in text_candidates if t.strip()).strip()
                     if joined:
                         return joined
-                    # Last resort: return stdout after removing event/progress noise.
                     return "\n".join(line for line in output.splitlines() if line.strip() and not line.startswith("Stage:"))
             return transcribe
 
@@ -1421,6 +1492,7 @@ Files: \(config.files.count)
 Output: \(config.writeNextToSource ? "next to source files" : (config.outputDir ?? ""))
 PATH: \(env["PATH"] ?? "")
 Persistent log: \(persistentLogPath())
+
 """
         logs += batchHeader
         appendPersistentLog(batchHeader)
@@ -1633,5 +1705,295 @@ Persistent log: \(persistentLogPath())
             URL(fileURLWithPath: cwd).appendingPathComponent(".venv/bin/python").path
         ]
         return candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) ?? candidates[0]
+    }
+
+    // MARK: - Dependency checks
+
+    private func statusDot(_ status: DependencyStatus) -> some View {
+        Circle()
+            .fill(statusDotColor(status))
+            .frame(width: 10, height: 10)
+    }
+
+    private func statusDotColor(_ status: DependencyStatus) -> Color {
+        switch status {
+        case .present, .downloaded: return .green
+        case .checking, .downloading: return .orange
+        case .missing: return .red
+        case .unknown: return .gray
+        }
+    }
+
+    private func ffmpegStatusLabel(_ status: DependencyStatus) -> String {
+        switch status {
+        case .unknown, .checking: return "Проверка..."
+        case .present: return "Установлен"
+        case .missing: return "Не найден"
+        case .downloaded, .downloading: return ""
+        }
+    }
+
+    private func pythonStatusLabel(_ status: DependencyStatus) -> String {
+        switch status {
+        case .unknown, .checking: return "Проверка..."
+        case .present: return "Готов"
+        case .missing: return "Не найден — создай venv"
+        case .downloaded, .downloading: return ""
+        }
+    }
+
+    private func checkDependencies() {
+        ffmpegStatus = .checking
+        pythonStatus = .checking
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Check ffmpeg
+            let ffCandidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+            let ffFound = ffCandidates.contains { FileManager.default.isExecutableFile(atPath: $0) }
+            DispatchQueue.main.async { self.ffmpegStatus = ffFound ? .present : .missing }
+
+            // Check Python venv
+            let py = self.pythonPath
+            if FileManager.default.isExecutableFile(atPath: py) {
+                let runtime = self.runtime
+                let importCheck: String
+                switch runtime {
+                case "mlx_audio_cli":
+                    importCheck = "import mlx_audio"
+                case "mlx_whisper":
+                    importCheck = "import mlx_whisper"
+                case "canary_mlx":
+                    importCheck = "import canary_mlx"
+                default:
+                    importCheck = "import mlx_audio"
+                }
+                let task = Process()
+                task.executableURL = URL(fileURLWithPath: py)
+                task.arguments = ["-c", importCheck]
+                task.standardOutput = FileHandle.nullDevice
+                task.standardError = FileHandle.nullDevice
+                do {
+                    try task.run()
+                    task.waitUntilExit()
+                    DispatchQueue.main.async { self.pythonStatus = task.terminationStatus == 0 ? .present : .missing }
+                } catch {
+                    DispatchQueue.main.async { self.pythonStatus = .missing }
+                }
+            } else {
+                DispatchQueue.main.async { self.pythonStatus = .missing }
+            }
+
+            // Check if the selected model is cached
+            self.checkModelCache()
+        }
+    }
+
+    private func checkModelCache() {
+        let modelID = model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedProfile.model : model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !modelID.isEmpty else { return }
+
+        let py = pythonPath
+        guard FileManager.default.isExecutableFile(atPath: py) else { return }
+
+        let task = Process()
+        let pipe = Pipe()
+        task.executableURL = URL(fileURLWithPath: py)
+        task.arguments = ["-c", """
+from pathlib import Path
+import sys
+model_id = sys.argv[1]
+cache = Path.home() / ".cache" / "huggingface" / "hub"
+ref_path = cache / ("models--" + model_id.replace("/", "--"))
+if ref_path.exists():
+    found = list(ref_path.rglob("*.safetensors")) + list(refpath.rglob("*.bin")) + list(ref_path.rglob("*.msgpack"))
+    if found:
+        print("CACHED")
+        sys.exit(0)
+print("ABSENT")
+""", modelID]
+        task.standardOutput = pipe
+        task.standardError = FileHandle.nullDevice
+        do {
+            try task.run()
+            task.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            DispatchQueue.main.async {
+                self.modelDownloadStatus[modelID] = output == "CACHED" ? .downloaded : .missing
+            }
+        } catch {
+            DispatchQueue.main.async { self.modelDownloadStatus[modelID] = .missing }
+        }
+    }
+
+    private func installFFmpeg() {
+        guard !isInstallingFFmpeg else { return }
+        isInstallingFFmpeg = true
+        logs += "Stage: installing ffmpeg via Homebrew...\n"
+        appendPersistentLog("Stage: installing ffmpeg via Homebrew...\n")
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let task = Process()
+            let pipe = Pipe()
+            task.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/brew")
+            task.arguments = ["install", "ffmpeg"]
+            task.standardOutput = pipe
+            task.standardError = pipe
+            do {
+                try task.run()
+                task.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(data: data, encoding: .utf8) ?? ""
+                DispatchQueue.main.async {
+                    self.logs += output + "\n"
+                    self.appendPersistentLog(output + "\n")
+                    if task.terminationStatus == 0 {
+                        self.ffmpegStatus = .present
+                        self.logs += "✅ ffmpeg установлен.\n"
+                    } else {
+                        self.logs += "❌ ffmpeg install failed (code \(task.terminationStatus)). Установи вручную: brew install ffmpeg\n"
+                    }
+                    self.isInstallingFFmpeg = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.logs += "❌ Не удалось запустить brew: \(error.localizedDescription)\n"
+                    self.logs += "   Установи ffmpeg вручную: brew install ffmpeg\n"
+                    self.isInstallingFFmpeg = false
+                }
+            }
+        }
+    }
+
+    private func setupPythonEnvironment() {
+        guard !isSettingUpPython else { return }
+        isSettingUpPython = true
+        let venvDir = NSHomeDirectory() + "/venvs/canary-mlx"
+        let pythonBin = "/usr/bin/python3"
+        logs += "Stage: creating venv at \(venvDir)...\n"
+        appendPersistentLog("Stage: creating venv at \(venvDir)...\n")
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let createTask = Process()
+            let createPipe = Pipe()
+            createTask.executableURL = URL(fileURLWithPath: pythonBin)
+            createTask.arguments = ["-m", "venv", venvDir]
+            createTask.standardOutput = createPipe
+            createTask.standardError = createPipe
+            do {
+                try createTask.run()
+                createTask.waitUntilExit()
+                let output = String(data: createPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                DispatchQueue.main.async { self.logs += output + "\n" }
+
+                guard createTask.terminationStatus == 0 else {
+                    DispatchQueue.main.async {
+                        self.logs += "❌ Не удалось создать venv. Создай вручную:\n   python3 -m venv \(venvDir)\n"
+                        self.isSettingUpPython = false
+                    }
+                    return
+                }
+
+                let venvPython = venvDir + "/bin/python"
+
+                // Install packages
+                let packages = "\"mlx-audio[stt]\" mlx-whisper canary-mlx huggingface_hub"
+                let installTask = Process()
+                let installPipe = Pipe()
+                installTask.executableURL = URL(fileURLWithPath: venvPython)
+                installTask.arguments = ["-m", "pip", "install", packages, "--quiet"]
+                installTask.standardOutput = installPipe
+                installTask.standardError = installPipe
+
+                DispatchQueue.main.async { self.logs += "Stage: installing packages... (может занять несколько минут)\n" }
+                try installTask.run()
+                installTask.waitUntilExit()
+                let pipOutput = String(data: installPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+
+                DispatchQueue.main.async {
+                    if installTask.terminationStatus == 0 {
+                        self.pythonPath = venvPython
+                        self.pythonStatus = .present
+                        self.logs += "✅ Venv создан и пакеты установлены: \(venvPython)\n"
+                    } else {
+                        self.logs += pipOutput + "\n"
+                        self.logs += "❌ pip install failed. Установи пакеты вручную:\n   \(venvPython) -m pip install mlx-audio mlx-whisper canary-mlx huggingface-hub\n"
+                    }
+                    self.isSettingUpPython = false
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.logs += "❌ Ошибка: \(error.localizedDescription). Создай venv вручную.\n"
+                    self.isSettingUpPython = false
+                }
+            }
+        }
+    }
+
+    private func downloadModel(_ modelID: String) {
+        guard !isDownloadingModel, !modelID.isEmpty else { return }
+        isDownloadingModel = true
+        modelDownloadStatus[modelID] = .downloading
+        logs += "Stage: downloading model \(modelID) via huggingface_hub...\n"
+        appendPersistentLog("Stage: downloading model \(modelID) via huggingface_hub...\n")
+
+        let py = pythonPath
+        guard FileManager.default.isExecutableFile(atPath: py) else {
+            logs += "❌ Python venv не найден. Сначала настрой окружение.\n"
+            modelDownloadStatus[modelID] = .missing
+            isDownloadingModel = false
+            return
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: py)
+            task.arguments = ["-c", """
+import sys
+try:
+    from huggingface_hub import snapshot_download
+    print("Stage: downloading " + \(modelID.debugDescription) + " to HuggingFace cache...", flush=True)
+    snapshot_download(\(modelID.debugDescription), resume_download=True, local_files_only=False)
+    print("DONE", flush=True)
+except KeyboardInterrupt:
+    print("INTERRUPTED", flush=True)
+    sys.exit(1)
+except Exception as e:
+    print(f"FAILED: {e}", flush=True)
+    sys.exit(1)
+"""]
+            task.standardOutput = Pipe()
+            task.standardError = task.standardOutput
+            do {
+                try task.run()
+                task.waitUntilExit()
+                if let pipe = task.standardOutput as? Pipe {
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: data, encoding: .utf8) ?? ""
+                    DispatchQueue.main.async {
+                        self.logs += output
+                        self.appendPersistentLog(output)
+                        if task.terminationStatus == 0 && output.contains("DONE") {
+                            self.modelDownloadStatus[modelID] = .downloaded
+                            self.logs += "✅ Модель \(modelID) загружена.\n"
+                        } else {
+                            self.modelDownloadStatus[modelID] = .missing
+                        }
+                        self.isDownloadingModel = false
+                    }
+                } else {
+                    DispatchQueue.main.async {
+                        self.modelDownloadStatus[modelID] = .missing
+                        self.isDownloadingModel = false
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    self.logs += "❌ Ошибка загрузки модели: \(error.localizedDescription)\n"
+                    self.modelDownloadStatus[modelID] = .missing
+                    self.isDownloadingModel = false
+                }
+            }
+        }
     }
 }
