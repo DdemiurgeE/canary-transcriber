@@ -611,7 +611,7 @@ struct ContentView: View {
                 model: "mlx-community/parakeet-tdt-0.6b-v3",
                 language: "ru",
                 chunkDuration: "30",
-                details: "Быстрый MLX STT по умолчанию: NVIDIA Parakeet TDT 0.6B v3 через mlx-audio."
+                details: "Default fast MLX STT: NVIDIA Parakeet TDT 0.6B v3 via mlx-audio."
             ),
             TranscriptionProfile(
                 id: "fast-whisper-turbo",
@@ -620,7 +620,7 @@ struct ContentView: View {
                 model: "mlx-community/whisper-large-v3-turbo",
                 language: "ru",
                 chunkDuration: "30",
-                details: "Быстрый Whisper-compatible профиль через mlx-whisper."
+                details: "Fast Whisper-compatible profile via mlx-whisper."
             ),
             TranscriptionProfile(
                 id: "accurate-whisper-large-v3",
@@ -629,7 +629,7 @@ struct ContentView: View {
                 model: "mlx-community/whisper-large-v3-mlx",
                 language: "ru",
                 chunkDuration: "30",
-                details: "Максимально проверенный universal baseline для качества и сложного аудио."
+                details: "Well-tested universal baseline for quality and challenging audio."
             ),
             TranscriptionProfile(
                 id: "multilingual-canary-v2",
@@ -638,7 +638,7 @@ struct ContentView: View {
                 model: "CogniSoftOrg/canary-1b-v2-mlx-bf16",
                 language: "ru",
                 chunkDuration: "30",
-                details: "Canary 1B v2 для 25 европейских языков; ASR/translation test path через mlx-audio."
+                details: "Canary 1B v2 for 25 European languages; ASR/translation via mlx-audio."
             ),
             TranscriptionProfile(
                 id: "realtime-voxtral-mini",
@@ -647,7 +647,7 @@ struct ContentView: View {
                 model: "mlx-community/Voxtral-Mini-4B-Realtime-2602-4bit",
                 language: "ru",
                 chunkDuration: "30",
-                details: "Streaming/realtime-oriented модель; в этом batch UI запускается по файлам через mlx-audio."
+                details: "Streaming/realtime-oriented model; runs on files via mlx-audio in batch mode."
             )
         ]
     }
@@ -734,7 +734,7 @@ struct ContentView: View {
                     }
                 }
 
-                Text("Click Refresh to recheck. Dependencies: brew / pip / venv. Models download from HuggingFace Hub.").font(.caption).foregroundStyle(.secondary)
+                Text("Dependencies: brew / pip / venv. Models download from HuggingFace Hub.").font(.caption).foregroundStyle(.secondary)
             }
             .padding(.vertical, 4)
         }
