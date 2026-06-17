@@ -9,6 +9,7 @@ A small native macOS SwiftUI app for batch transcription of existing audio files
 - Native macOS SwiftUI interface.
 - Select one or multiple audio/video files.
 - Add files with a file picker or drag and drop them into the file list.
+- Capture audio from a specific running macOS application via ScreenCaptureKit, similar to OBS Studio's **macOS Audio Capture**; optionally record your microphone too, mix app+mic into one `.m4a`, then add it to the transcription queue.
 - Uses an external Python venv with profile-specific MLX packages.
 - Built-in model profiles:
   - `fast — Parakeet v3`: `mlx-community/parakeet-tdt-0.6b-v3` via `mlx-audio`.
@@ -75,6 +76,8 @@ If the DMG path is inconvenient, download `CanaryTranscriber.app.zip`, unzip it,
 
 ## Usage
 
+### File transcription
+
 1. Open **Canary Transcriber**.
 2. Confirm the `Python venv` field points to a Python where the selected profile runtime imports successfully.
 3. Add audio/video files with **Add files**, or drag and drop files directly into the file list.
@@ -91,6 +94,20 @@ If the DMG path is inconvenient, download `CanaryTranscriber.app.zip`, unzip it,
    - `Chunk sec`: `30`
 6. Click **Transcribe**.
 7. Find outputs next to the source files or in the selected output folder.
+
+### Capture audio from a running app
+
+1. Start audio playback or join a call in the target app, for example Zoom, Teams, Safari, Chrome, Telegram, etc.
+2. In **Захват аудио приложения — ScreenCaptureKit**, click **Refresh apps** and select the target application.
+3. Leave **Добавлять мой микрофон и сводить app + mic в один файл** enabled if you want your own speech included.
+4. Choose a specific **Microphone** device, or leave **System default microphone**.
+5. Click **Record app + mic**.
+6. On first use, allow Canary Transcriber in macOS **System Settings → Privacy & Security → Screen & System Audio Recording** / **Screen Recording** and **Microphone** if prompted.
+7. Click **Stop recording** when finished.
+8. The app saves app-only `.m4a`, mic-only `.caf`, and mixed `.m4a` artifacts under `~/Documents/CanaryTranscripts/AppAudioCaptures/`; the mixed `conference-audio-*.m4a` is automatically added to the file list.
+9. Click **Transcribe** to process the captured conference audio with the selected MLX profile.
+
+This path captures the selected app before audio reaches the output device, so it works while listening through headphones. It does not require BlackHole/Loopback. App audio uses ScreenCaptureKit; microphone recording uses AVAudioEngine for the selected CoreAudio input device, then `ffmpeg` `amix` after Stop. The mix is microphone-priority: app audio is attenuated and microphone audio is noise-filtered, dynamically normalized, and boosted before limiting. This avoids ScreenCaptureKit `.microphone` dropping mic samples when the captured app is also producing audio. If the selected app is audible through speakers, the physical microphone may still pick it up; use headphones to avoid acoustic bleed.
 
 For MLX/Metal memory errors, lower `Chunk sec` to `15` or `10`.
 

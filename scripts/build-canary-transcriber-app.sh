@@ -48,6 +48,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Canary Transcriber захватывает аудио выбранного приложения для локальной транскрипции.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Canary Transcriber записывает ваш микрофон вместе со звуком выбранного приложения для транскрипции встреч.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Local app</string>
 </dict>

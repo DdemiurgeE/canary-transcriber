@@ -2,6 +2,9 @@ import SwiftUI
 import Foundation
 import AppKit
 import UniformTypeIdentifiers
+import AVFoundation
+import AudioToolbox
+import ScreenCaptureKit
 
 @main
 struct CanaryTranscriberApp: App {
@@ -48,6 +51,458 @@ struct TranscriptionProfile: Identifiable, Hashable {
     let details: String
 }
 
+
+struct CaptureAppTarget: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let bundleIdentifier: String
+    let processID: pid_t
+
+    var title: String {
+        let bundle = bundleIdentifier.isEmpty ? "unknown bundle" : bundleIdentifier
+        return "\(name) (pid \(processID), \(bundle))"
+    }
+}
+
+struct MicrophoneDeviceTarget: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let modelID: String
+    let manufacturer: String
+
+    var title: String {
+        let vendor = manufacturer.isEmpty ? "" : " — \(manufacturer)"
+        return "\(name)\(vendor)"
+    }
+}
+
+final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutput, SCStreamDelegate {
+    @Published private(set) var isRecording = false
+
+    private final class RealtimeAudioFileWriter {
+        let url: URL
+        let writer: AVAssetWriter
+        let input: AVAssetWriterInput
+        var hasStartedSession = false
+
+        init(url: URL, sampleRate: Int = 48_000, channels: Int = 2) throws {
+            self.url = url
+            writer = try AVAssetWriter(outputURL: url, fileType: .m4a)
+            let settings: [String: Any] = [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: channels,
+                AVEncoderBitRateKey: 192_000
+            ]
+            input = AVAssetWriterInput(mediaType: .audio, outputSettings: settings)
+            input.expectsMediaDataInRealTime = true
+            guard writer.canAdd(input) else {
+                throw NSError(domain: "CanaryAppAudioCapture", code: 3, userInfo: [NSLocalizedDescriptionKey: "AVAssetWriter не может добавить AAC audio input для \(url.lastPathComponent)."])
+            }
+            writer.add(input)
+            guard writer.startWriting() else {
+                throw writer.error ?? NSError(domain: "CanaryAppAudioCapture", code: 4, userInfo: [NSLocalizedDescriptionKey: "AVAssetWriter не стартовал для \(url.lastPathComponent)."])
+            }
+        }
+
+        func append(_ sampleBuffer: CMSampleBuffer) {
+            guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
+            if !hasStartedSession {
+                let timestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+                writer.startSession(atSourceTime: timestamp)
+                hasStartedSession = true
+            }
+            if input.isReadyForMoreMediaData {
+                input.append(sampleBuffer)
+            }
+        }
+
+        func finish(completion: @escaping (Result<URL, Error>) -> Void) {
+            input.markAsFinished()
+            writer.finishWriting {
+                if let error = self.writer.error {
+                    completion(.failure(error))
+                } else if Self.isUsableAudioFile(self.url) {
+                    completion(.success(self.url))
+                } else {
+                    completion(.failure(NSError(domain: "CanaryAppAudioCapture", code: 5, userInfo: [NSLocalizedDescriptionKey: "Файл \(self.url.lastPathComponent) пустой или слишком маленький."])))
+                }
+            }
+        }
+
+        static func isUsableAudioFile(_ url: URL?) -> Bool {
+            guard let url, FileManager.default.fileExists(atPath: url.path) else { return false }
+            let size = ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value) ?? 0
+            return size > 1024
+        }
+    }
+
+
+    private final class MicrophoneEngineRecorder {
+        let url: URL
+        private let deviceUID: String?
+        private let engine = AVAudioEngine()
+        private var file: AVAudioFile?
+        private var recordedFrames: AVAudioFramePosition = 0
+
+        init(url: URL, deviceUID: String?) {
+            self.url = url
+            self.deviceUID = deviceUID?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? deviceUID : nil
+        }
+
+        func start() throws {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+            }
+
+            let input = engine.inputNode
+            if let deviceUID, let audioDeviceID = Self.audioDeviceID(matchingUID: deviceUID), let audioUnit = input.audioUnit {
+                var mutableDeviceID = audioDeviceID
+                let status = AudioUnitSetProperty(
+                    audioUnit,
+                    kAudioOutputUnitProperty_CurrentDevice,
+                    kAudioUnitScope_Global,
+                    0,
+                    &mutableDeviceID,
+                    UInt32(MemoryLayout<AudioDeviceID>.size)
+                )
+                guard status == noErr else {
+                    throw NSError(domain: "CanaryAppAudioCapture", code: 21, userInfo: [NSLocalizedDescriptionKey: "Не удалось выбрать микрофон \(deviceUID) для AVAudioEngine (AudioUnitSetProperty status \(status))."])
+                }
+            } else if let deviceUID {
+                throw NSError(domain: "CanaryAppAudioCapture", code: 23, userInfo: [NSLocalizedDescriptionKey: "Не удалось найти CoreAudio device для выбранного микрофона \(deviceUID). Выбери System default microphone или нажми Refresh mics."])
+            }
+
+            let format = input.outputFormat(forBus: 0)
+            guard format.sampleRate > 0, format.channelCount > 0 else {
+                throw NSError(domain: "CanaryAppAudioCapture", code: 22, userInfo: [NSLocalizedDescriptionKey: "AVAudioEngine вернул пустой input format для микрофона."])
+            }
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            self.file = file
+            recordedFrames = 0
+
+            input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
+                guard let self, buffer.frameLength > 0 else { return }
+                do {
+                    try self.file?.write(from: buffer)
+                    self.recordedFrames += AVAudioFramePosition(buffer.frameLength)
+                } catch {
+                    // Surface this on finish via the tiny-file/empty-file validation.
+                }
+            }
+            engine.prepare()
+            try engine.start()
+        }
+
+        func finish(completion: @escaping (Result<URL, Error>) -> Void) {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            file = nil
+
+            if RealtimeAudioFileWriter.isUsableAudioFile(url), recordedFrames >= 4_800 {
+                completion(.success(url))
+            } else {
+                completion(.failure(NSError(domain: "CanaryAppAudioCapture", code: 18, userInfo: [NSLocalizedDescriptionKey: "Микрофон записал слишком мало данных (\(recordedFrames) frames). Проверь выбранное устройство и Microphone permission."])))
+            }
+        }
+
+        private static func audioDeviceID(matchingUID targetUID: String) -> AudioDeviceID? {
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDevices,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var dataSize: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize) == noErr else { return nil }
+            let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+            var devices = Array(repeating: AudioDeviceID(), count: count)
+            guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &devices) == noErr else { return nil }
+
+            for device in devices {
+                var uidAddress = AudioObjectPropertyAddress(
+                    mSelector: kAudioDevicePropertyDeviceUID,
+                    mScope: kAudioObjectPropertyScopeGlobal,
+                    mElement: kAudioObjectPropertyElementMain
+                )
+                var uidSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+                var uid: Unmanaged<CFString>?
+                if AudioObjectGetPropertyData(device, &uidAddress, 0, nil, &uidSize, &uid) == noErr,
+                   uid?.takeUnretainedValue() as String? == targetUID {
+                    return device
+                }
+            }
+            return nil
+        }
+    }
+
+    private var stream: SCStream?
+    private var appAudioWriter: RealtimeAudioFileWriter?
+    private var microphoneRecorder: MicrophoneEngineRecorder?
+    private let sampleQueue = DispatchQueue(label: "canary.app-audio-capture.samples")
+    private let microphoneQueue = DispatchQueue(label: "canary.microphone-capture.samples")
+    private var appOutputURL: URL?
+    private var microphoneOutputURL: URL?
+    private var mixedOutputURL: URL?
+    private var includeMicrophone = false
+    private var onLog: ((String) -> Void)?
+    private var onFinished: ((Result<URL, Error>) -> Void)?
+
+    @MainActor
+    static func loadShareableApplications() async throws -> [CaptureAppTarget] {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        return content.applications
+            .filter { $0.processID != ownPID }
+            .map { app in
+                CaptureAppTarget(
+                    id: "\(app.bundleIdentifier)|\(app.processID)",
+                    name: app.applicationName.isEmpty ? "Application" : app.applicationName,
+                    bundleIdentifier: app.bundleIdentifier,
+                    processID: app.processID
+                )
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    @MainActor
+    static func loadMicrophones() -> [MicrophoneDeviceTarget] {
+        AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.microphone],
+            mediaType: .audio,
+            position: .unspecified
+        ).devices
+            .map { device in
+                MicrophoneDeviceTarget(
+                    id: device.uniqueID,
+                    name: device.localizedName,
+                    modelID: device.modelID,
+                    manufacturer: device.manufacturer
+                )
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    func start(target: CaptureAppTarget, includeMicrophone: Bool, microphoneDeviceID: String?, outputDirectory: URL, onLog: @escaping (String) -> Void, onFinished: @escaping (Result<URL, Error>) -> Void) async {
+        guard !isRecording else { return }
+        self.includeMicrophone = includeMicrophone
+        self.onLog = onLog
+        self.onFinished = onFinished
+
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            guard let display = content.displays.first else {
+                throw NSError(domain: "CanaryAppAudioCapture", code: 1, userInfo: [NSLocalizedDescriptionKey: "ScreenCaptureKit не вернул ни одного дисплея для content filter."])
+            }
+            guard let app = content.applications.first(where: { $0.processID == target.processID }) else {
+                throw NSError(domain: "CanaryAppAudioCapture", code: 2, userInfo: [NSLocalizedDescriptionKey: "Приложение больше не найдено: \(target.title). Обнови список приложений."])
+            }
+
+            try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+            let safeName = target.name.replacingOccurrences(of: "[^A-Za-z0-9А-Яа-я._-]+", with: "-", options: .regularExpression)
+            let stamp = Int(Date().timeIntervalSince1970)
+            let appURL = outputDirectory.appendingPathComponent("app-audio-\(safeName)-\(stamp).m4a")
+            let micURL = outputDirectory.appendingPathComponent("mic-audio-\(safeName)-\(stamp).caf")
+            let mixedURL = outputDirectory.appendingPathComponent("conference-audio-\(safeName)-\(stamp).m4a")
+            appOutputURL = appURL
+            microphoneOutputURL = includeMicrophone ? micURL : nil
+            mixedOutputURL = includeMicrophone ? mixedURL : appURL
+
+            let configuration = SCStreamConfiguration()
+            configuration.capturesAudio = true
+            configuration.excludesCurrentProcessAudio = true
+            configuration.sampleRate = 48_000
+            configuration.channelCount = 2
+            configuration.width = 2
+            configuration.height = 2
+            configuration.minimumFrameInterval = CMTime(value: 1, timescale: 1)
+
+            let filter = SCContentFilter(display: display, including: [app], exceptingWindows: [])
+            let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
+            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
+
+            self.appAudioWriter = try RealtimeAudioFileWriter(url: appURL)
+            self.stream = stream
+
+            try await stream.startCapture()
+            if includeMicrophone {
+                let recorder = MicrophoneEngineRecorder(url: micURL, deviceUID: microphoneDeviceID)
+                try recorder.start()
+                microphoneRecorder = recorder
+            }
+            await MainActor.run {
+                self.isRecording = true
+                onLog("🎙️ App audio capture started: \(target.title) → \(appURL.path)\n")
+                if includeMicrophone {
+                    let micLabel = microphoneDeviceID?.isEmpty == false ? microphoneDeviceID! : "system default"
+                    onLog("🎤 Microphone capture enabled via AVAudioEngine (device=\(micLabel)) → \(micURL.path)\n")
+                    onLog("   После Stop app+mic будут сведены через ffmpeg в \(mixedURL.lastPathComponent).\n")
+                }
+                onLog("   macOS может запросить Screen Recording/System Audio Recording и Microphone permissions для Canary Transcriber.\n")
+            }
+        } catch {
+            cleanupAfterFailure()
+            await MainActor.run {
+                onLog("❌ Не удалось стартовать app audio capture: \(error.localizedDescription)\n")
+                onFinished(.failure(error))
+            }
+        }
+    }
+
+    func stop() {
+        guard isRecording || stream != nil || appAudioWriter != nil || microphoneRecorder != nil else { return }
+        let streamToStop = stream
+        onLog?("⏹️ Stopping app/mic audio capture...\n")
+        isRecording = false
+        Task {
+            if let streamToStop {
+                try? await streamToStop.stopCapture()
+            }
+            finishWritersAndMixIfNeeded()
+        }
+    }
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+        switch type {
+        case .audio:
+            appAudioWriter?.append(sampleBuffer)
+        default:
+            break
+        }
+    }
+
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        onLog?("⚠️ ScreenCaptureKit stream stopped with error: \(error.localizedDescription)\n")
+        stop()
+    }
+
+    private func finishWritersAndMixIfNeeded() {
+        sampleQueue.async {
+            let appWriter = self.appAudioWriter
+            let micRecorder = self.microphoneRecorder
+            let includeMic = self.includeMicrophone
+            let mixedURL = self.mixedOutputURL
+
+            let group = DispatchGroup()
+            var appResult: Result<URL, Error>?
+            var micResult: Result<URL, Error>?
+
+            if let appWriter {
+                group.enter()
+                appWriter.finish { result in
+                    appResult = result
+                    group.leave()
+                }
+            }
+            if let micRecorder {
+                group.enter()
+                self.microphoneQueue.async {
+                    micRecorder.finish { result in
+                        micResult = result
+                        group.leave()
+                    }
+                }
+            }
+
+            group.notify(queue: self.sampleQueue) {
+                let finalResult: Result<URL, Error>
+                switch appResult {
+                case .success(let appURL):
+                    if includeMic {
+                        switch micResult {
+                        case .success(let micURL):
+                            do {
+                                let out = try self.mixAppAndMicrophone(appURL: appURL, micURL: micURL, outputURL: mixedURL ?? appURL)
+                                finalResult = .success(out)
+                            } catch {
+                                finalResult = .failure(error)
+                            }
+                        case .failure(let error):
+                            finalResult = .failure(NSError(domain: "CanaryAppAudioCapture", code: 7, userInfo: [NSLocalizedDescriptionKey: "Звук приложения записан, но микрофон не записался: \(error.localizedDescription). Проверь Microphone permission для Canary Transcriber."]))
+                        case .none:
+                            finalResult = .failure(NSError(domain: "CanaryAppAudioCapture", code: 8, userInfo: [NSLocalizedDescriptionKey: "Микрофон был включён, но mic writer не вернул результат."]))
+                        }
+                    } else {
+                        finalResult = .success(appURL)
+                    }
+                case .failure(let error):
+                    finalResult = .failure(error)
+                case .none:
+                    finalResult = .failure(NSError(domain: "CanaryAppAudioCapture", code: 9, userInfo: [NSLocalizedDescriptionKey: "App audio writer не вернул результат."]))
+                }
+
+                DispatchQueue.main.async {
+                    self.stream = nil
+                    self.appAudioWriter = nil
+                    self.microphoneRecorder = nil
+                    self.appOutputURL = nil
+                    self.microphoneOutputURL = nil
+                    self.mixedOutputURL = nil
+                    self.includeMicrophone = false
+                    self.isRecording = false
+                    self.onFinished?(finalResult)
+                }
+            }
+        }
+    }
+
+    private func mixAppAndMicrophone(appURL: URL, micURL: URL, outputURL: URL) throws -> URL {
+        let ffmpeg = try resolveFFmpeg()
+        onLog?("Stage: mix app audio + microphone with ffmpeg (mic-priority: app -13 dB, mic normalized/boosted) → \(outputURL.path)\n")
+        let proc = Process()
+        let pipe = Pipe()
+        proc.executableURL = URL(fileURLWithPath: ffmpeg)
+        proc.arguments = [
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-i", appURL.path,
+            "-i", micURL.path,
+            "-filter_complex", "[0:a]volume=0.22[a0];[1:a]highpass=f=90,lowpass=f=9000,afftdn=nf=-28,dynaudnorm=f=150:g=31:p=0.95:m=15,volume=3.0[a1];[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95,aresample=48000[a]",
+            "-map", "[a]",
+            "-c:a", "aac", "-b:a", "192k",
+            outputURL.path
+        ]
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+        try proc.run()
+        proc.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        guard proc.terminationStatus == 0 else {
+            throw NSError(domain: "CanaryAppAudioCapture", code: 10, userInfo: [NSLocalizedDescriptionKey: "ffmpeg не смог свести app audio и микрофон (code \(proc.terminationStatus)): \(output.suffix(2000))"])
+        }
+        guard RealtimeAudioFileWriter.isUsableAudioFile(outputURL) else {
+            throw NSError(domain: "CanaryAppAudioCapture", code: 11, userInfo: [NSLocalizedDescriptionKey: "ffmpeg создал пустой/слишком маленький mixed-файл: \(outputURL.path)"])
+        }
+        return outputURL
+    }
+
+    private func resolveFFmpeg() throws -> String {
+        let candidates = [
+            ProcessInfo.processInfo.environment["FFMPEG_BIN"],
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/usr/bin/ffmpeg"
+        ]
+        for candidate in candidates {
+            if let candidate, FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        throw NSError(domain: "CanaryAppAudioCapture", code: 12, userInfo: [NSLocalizedDescriptionKey: "ffmpeg not found. Install with: brew install ffmpeg"])
+    }
+
+    private func cleanupAfterFailure() {
+        stream = nil
+        appAudioWriter = nil
+        microphoneRecorder = nil
+        appOutputURL = nil
+        microphoneOutputURL = nil
+        mixedOutputURL = nil
+        includeMicrophone = false
+        isRecording = false
+    }
+}
+
 struct ContentView: View {
     @State private var files: [AudioFileItem] = []
     @State private var selectedFileID: AudioFileItem.ID?
@@ -68,17 +523,30 @@ struct ContentView: View {
     @State private var currentConfigPath: String?
     @State private var isFileDropTargeted = false
 
+    @StateObject private var appAudioCapture = AppAudioCaptureController()
+    @State private var captureApps: [CaptureAppTarget] = []
+    @State private var selectedCaptureAppID: CaptureAppTarget.ID?
+    @State private var isRefreshingCaptureApps = false
+    @State private var captureMicrophone: Bool = true
+    @State private var microphoneDevices: [MicrophoneDeviceTarget] = []
+    @State private var selectedMicrophoneID: MicrophoneDeviceTarget.ID?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             settingsPanel
+            appCapturePanel
             filePanel
             controlsPanel
             logPanel
         }
         .padding(16)
         .frame(minWidth: 1080, idealWidth: 1120, minHeight: 820, idealHeight: 900)
-        .onAppear { bringAppToFront() }
+        .onAppear {
+            bringAppToFront()
+            refreshCaptureApps()
+            refreshMicrophones()
+        }
     }
 
     private var profiles: [TranscriptionProfile] {
@@ -230,6 +698,60 @@ struct ContentView: View {
         }
     }
 
+
+
+    private var appCapturePanel: some View {
+        GroupBox("Захват аудио приложения — ScreenCaptureKit") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
+                    Text("Application")
+                        .frame(width: 120, alignment: .leading)
+                    Picker("Application", selection: $selectedCaptureAppID) {
+                        Text(captureApps.isEmpty ? "Нажми Refresh apps" : "Выбери приложение").tag(Optional<CaptureAppTarget.ID>.none)
+                        ForEach(captureApps) { app in
+                            Text(app.title).tag(Optional(app.id))
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 520)
+                    .disabled(appAudioCapture.isRecording || isRunning)
+
+                    Button(isRefreshingCaptureApps ? "Refreshing..." : "Refresh apps") { refreshCaptureApps() }
+                        .disabled(isRefreshingCaptureApps || appAudioCapture.isRecording || isRunning)
+
+                    Button(appAudioCapture.isRecording ? "Recording..." : "Record app + mic") { startAppAudioCapture() }
+                        .disabled(appAudioCapture.isRecording || isRunning || selectedCaptureApp == nil)
+
+                    Button("Stop recording") { stopAppAudioCapture() }
+                        .disabled(!appAudioCapture.isRecording)
+                }
+
+                HStack(spacing: 8) {
+                    Toggle("Добавлять мой микрофон и сводить app + mic в один файл", isOn: $captureMicrophone)
+                        .toggleStyle(.checkbox)
+                        .disabled(appAudioCapture.isRecording || isRunning)
+
+                    Picker("Microphone", selection: $selectedMicrophoneID) {
+                        Text(microphoneDevices.isEmpty ? "System default microphone" : "System default microphone").tag(Optional<MicrophoneDeviceTarget.ID>.none)
+                        ForEach(microphoneDevices) { mic in
+                            Text(mic.title).tag(Optional(mic.id))
+                        }
+                    }
+                    .frame(maxWidth: 360)
+                    .disabled(!captureMicrophone || appAudioCapture.isRecording || isRunning)
+
+                    Button("Refresh mics") { refreshMicrophones() }
+                        .disabled(appAudioCapture.isRecording || isRunning)
+                }
+
+                Text("Пишет звук выбранного приложения через ScreenCaptureKit. Если включён микрофон, пишет выбранный Microphone device и после Stop сводит app+mic через ffmpeg в conference-audio-*.m4a, который добавляется в очередь. Требуются Screen Recording/System Audio Recording и Microphone permissions; наушники не мешают, потому что app audio захватывается до вывода на устройство.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 4)
+        }
+    }
+
     private var filePanel: some View {
         GroupBox("Файлы") {
             VStack(alignment: .leading, spacing: 8) {
@@ -329,6 +851,94 @@ struct ContentView: View {
             .background(Color(nsColor: .textBackgroundColor))
             .cornerRadius(8)
         }
+    }
+
+
+
+    private var selectedCaptureApp: CaptureAppTarget? {
+        guard let selectedCaptureAppID else { return nil }
+        return captureApps.first(where: { $0.id == selectedCaptureAppID })
+    }
+
+    private var selectedMicrophone: MicrophoneDeviceTarget? {
+        guard let selectedMicrophoneID else { return nil }
+        return microphoneDevices.first(where: { $0.id == selectedMicrophoneID })
+    }
+
+    private func refreshMicrophones() {
+        let devices = AppAudioCaptureController.loadMicrophones()
+        microphoneDevices = devices
+        if let selectedMicrophoneID, !devices.contains(where: { $0.id == selectedMicrophoneID }) {
+            self.selectedMicrophoneID = nil
+        }
+        logs += "Stage: microphones found: \(devices.count)"
+        if let selectedMicrophone {
+            logs += "; selected=\(selectedMicrophone.title)"
+        } else {
+            logs += "; selected=system default"
+        }
+        logs += "\n"
+    }
+
+    private func refreshCaptureApps() {
+        guard !isRefreshingCaptureApps else { return }
+        isRefreshingCaptureApps = true
+        logs += "Stage: refresh ScreenCaptureKit application list...\n"
+        Task {
+            do {
+                let apps = try await AppAudioCaptureController.loadShareableApplications()
+                await MainActor.run {
+                    self.captureApps = apps
+                    if let selectedCaptureAppID, !apps.contains(where: { $0.id == selectedCaptureAppID }) {
+                        self.selectedCaptureAppID = nil
+                    }
+                    if self.selectedCaptureAppID == nil {
+                        self.selectedCaptureAppID = apps.first?.id
+                    }
+                    self.logs += "Stage: ScreenCaptureKit apps found: \(apps.count)\n"
+                    self.isRefreshingCaptureApps = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.logs += "❌ Cannot refresh app list: \(error.localizedDescription)\n"
+                    self.logs += "   Проверь System Settings → Privacy & Security → Screen & System Audio Recording / Screen Recording для Canary Transcriber.\n"
+                    self.isRefreshingCaptureApps = false
+                }
+            }
+        }
+    }
+
+    private func startAppAudioCapture() {
+        guard let target = selectedCaptureApp else {
+            logs += "⚠️ Сначала выбери приложение для захвата.\n"
+            return
+        }
+        let captureDir = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Documents/CanaryTranscripts/AppAudioCaptures", isDirectory: true)
+        let micLabel = captureMicrophone ? (selectedMicrophone?.title ?? "system default") : "off"
+        logs += "Stage: start app audio capture for \(target.title); microphone=\(micLabel)\n"
+        Task {
+            await appAudioCapture.start(target: target, includeMicrophone: captureMicrophone, microphoneDeviceID: selectedMicrophoneID, outputDirectory: captureDir, onLog: { text in
+                DispatchQueue.main.async {
+                    self.logs += text
+                    self.appendPersistentLog(text)
+                }
+            }, onFinished: { result in
+                switch result {
+                case .success(let url):
+                    self.logs += "✅ App audio recording saved: \(url.path)\n"
+                    self.appendPersistentLog("✅ App audio recording saved: \(url.path)\n")
+                    self.addAudioPaths([url.path], source: "app audio capture")
+                case .failure(let error):
+                    self.logs += "❌ App audio recording failed: \(error.localizedDescription)\n"
+                    self.appendPersistentLog("❌ App audio recording failed: \(error.localizedDescription)\n")
+                }
+            })
+        }
+    }
+
+    private func stopAppAudioCapture() {
+        appAudioCapture.stop()
     }
 
     private func applySelectedProfile() {
