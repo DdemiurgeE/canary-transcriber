@@ -25,7 +25,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>ru</string>
+    <string>en</string>
     <key>CFBundleExecutable</key>
     <string>canary-transcriber</string>
     <key>CFBundleIdentifier</key>

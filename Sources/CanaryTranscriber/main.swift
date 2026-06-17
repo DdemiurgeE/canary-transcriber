@@ -13,6 +13,32 @@ struct CanaryTranscriberApp: App {
             ContentView()
         }
         .windowResizability(.contentMinSize)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("About Canary Transcriber") {
+                    let credits = NSAttributedString(
+                        string: """
+Canary Transcriber — macOS GUI for batch transcription of audio/video files using local MLX STT runtimes.
+
+Profiles:
+• fast-parakeet-v3: NVIDIA Parakeet TDT 0.6B v3 via mlx-audio
+• fast-whisper-turbo: Whisper large-v3-turbo via mlx-whisper
+• accurate-whisper-large-v3: Whisper large-v3-mlx via mlx-whisper
+• multilingual-canary-v2: CogniSoft Canary 1B v2 via mlx-audio
+• realtime-voxtral-mini: Voxtral Mini 4B Realtime via mlx-audio
+
+Features: ScreenCaptureKit per-app audio capture, AVAudioEngine microphone recording, mic-priority ffmpeg mix, automated dependency setup, model download via HuggingFace Hub.
+
+License: MIT
+""",
+                        attributes: [.font: NSFont.systemFont(ofSize: 11)]
+                    )
+                    NSApplication.shared.orderFrontStandardAboutPanel(
+                        options: [.credits: credits]
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1212,7 +1238,7 @@ struct ContentView: View {
         pythonPath = cleanPython
         guard FileManager.default.isExecutableFile(atPath: cleanPython) else {
             logs += "❌ Python is not executable: \(cleanPython)\n"
-            logs += "   Set the Python venv path, e.g. /Users/pavelpalnikov/venvs/canary-mlx/bin/python\n"
+            logs += "   Set the Python venv path, e.g. ~/venvs/canary-mlx/bin/python\n"
             return
         }
 
@@ -1754,7 +1780,7 @@ Persistent log: \(persistentLogPath())
         }
         let cwd = FileManager.default.currentDirectoryPath
         let candidates = [
-            "/Users/pavelpalnikov/venvs/canary-mlx/bin/python",
+            URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("venvs/canary-mlx/bin/python").path,
             URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("venvs/canary-mlx/bin/python").path,
             URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".venvs/canary-mlx/bin/python").path,
             URL(fileURLWithPath: cwd).appendingPathComponent(".venv-canary/bin/python").path,
