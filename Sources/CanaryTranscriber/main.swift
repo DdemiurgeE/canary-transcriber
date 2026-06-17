@@ -1529,6 +1529,7 @@ except Exception as e:
         proc.standardError = pipe
         var env = ProcessInfo.processInfo.environment
         env["PYTHONUNBUFFERED"] = "1"
+        env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
         let guiSafePath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
         if let existingPath = env["PATH"], !existingPath.isEmpty {
             env["PATH"] = guiSafePath + ":" + existingPath
