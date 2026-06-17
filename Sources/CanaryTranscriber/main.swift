@@ -743,23 +743,20 @@ struct ContentView: View {
     private var settingsPanel: some View {
         GroupBox("Settings") {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top) {
+                HStack {
                     Text("Profile")
                         .frame(width: 120, alignment: .leading)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Picker("Profile", selection: $selectedProfileID) {
-                            ForEach(profiles) { profile in
-                                Text(profile.title).tag(profile.id)
-                            }
+                    Picker("Profile", selection: $selectedProfileID) {
+                        ForEach(profiles) { profile in
+                            Text(profile.title).tag(profile.id)
                         }
-                        .labelsHidden()
-                        .frame(maxWidth: 360)
-                        .onChange(of: selectedProfileID) { applySelectedProfile() }
-
-                        Text(selectedProfile.details)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
+                    .labelsHidden()
+                    .frame(maxWidth: 360)
+                    .onChange(of: selectedProfileID) { applySelectedProfile() }
+                    Text(selectedProfile.details)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Spacer()
                 }
 
