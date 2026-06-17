@@ -52,7 +52,7 @@ If you only use the legacy `qfuxa/canary-mlx` runtime, `canary-mlx` is enough. P
 The app defaults to this Python path:
 
 ```text
-/Users/pavelpalnikov/venvs/canary-mlx/bin/python
+~/venvs/canary-mlx/bin/python
 ```
 
 You can change it in the UI or launch the app with:
@@ -192,7 +192,7 @@ The app also sets a GUI-safe PATH for subprocesses:
 Verify your venv:
 
 ```bash
-/Users/pavelpalnikov/venvs/canary-mlx/bin/python - <<'PY'
+~/venvs/canary-mlx/bin/python - <<'PY'
 from canary_mlx import load_model
 print('canary_mlx import OK')
 PY
@@ -201,12 +201,12 @@ PY
 For other profiles, verify the matching package:
 
 ```bash
-/Users/pavelpalnikov/venvs/canary-mlx/bin/python - <<'PY'
+~/venvs/canary-mlx/bin/python - <<'PY'
 import mlx_whisper
 print('mlx_whisper import OK')
 PY
 
-/Users/pavelpalnikov/venvs/canary-mlx/bin/python - <<'PY'
+~/venvs/canary-mlx/bin/python - <<'PY'
 import mlx_audio
 print('mlx_audio import OK')
 PY
