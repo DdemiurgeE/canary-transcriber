@@ -6,7 +6,7 @@ A small native macOS SwiftUI app for batch transcription of existing audio files
 
 ##Screenshot
 
-![Canary Transcriber Screenshot](assets/canary-transcriber/Screenshot.png)
+![Canary Transcriber Screenshot](assets/canary-transcriber/screenshot.png)
 
 ## Features
 
