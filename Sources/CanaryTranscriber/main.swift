@@ -1301,6 +1301,7 @@ import sys
 import tempfile
 import traceback
 import wave
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -1507,6 +1508,7 @@ profile: {profile_id}
 runtime: {runtime}
 model: {model_id}
 language: {language}
+date: {datetime.now().isoformat()}
 ---
 
 # Transcript: {audio_path.name}
