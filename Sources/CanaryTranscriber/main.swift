@@ -1324,7 +1324,7 @@ try:
         base_dir = audio_path.parent if write_next_to_source else output_dir
         base_dir.mkdir(parents=True, exist_ok=True)
         stem = audio_path.stem
-        return base_dir / f"{stem}.canary.txt", base_dir / f"{stem}.canary.json"
+        return base_dir / f"{stem}.canary.txt", base_dir / f"{stem}.canary.json", base_dir / f"{stem}.canary.md"
 
     def resolve_ffmpeg():
         candidates = [
@@ -1478,7 +1478,7 @@ try:
     for index, audio_path in enumerate(files, 1):
         emit("file_started", path=str(audio_path), index=index, total=len(files))
         print(f"Stage: transcribe [{index}/{len(files)}] {audio_path}", flush=True)
-        txt_path, json_path = output_paths(audio_path)
+        txt_path, json_path, md_path = output_paths(audio_path)
         try:
             parts = []
             chunk_records = []
@@ -1500,6 +1500,20 @@ try:
 
             text = "\n".join(parts).strip()
             txt_path.write_text(text, encoding="utf-8")
+            # Write Markdown with frontmatter
+            md_content = f"""---
+source: {audio_path.name}
+profile: {profile_id}
+runtime: {runtime}
+model: {model_id}
+language: {language}
+---
+
+# Transcript: {audio_path.name}
+
+{text}
+"""
+            md_path.write_text(md_content, encoding="utf-8")
             payload = {
                 "audio": str(audio_path),
                 "profile": profile_id,
@@ -1515,7 +1529,7 @@ try:
             }
             json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
             ok += 1
-            emit("file_done", path=str(audio_path), txt=str(txt_path), json=str(json_path), chars=len(text))
+            emit("file_done", path=str(audio_path), txt=str(txt_path), json=str(json_path), md=str(md_path), chars=len(text))
             print(f"Transcript saved: {txt_path} (chars={len(text)})", flush=True)
             if len(text.strip()) == 0:
                 print("Warning: selected STT profile returned empty text for this file. Check runtime dependencies, language/audio format, or try another profile.", flush=True)
