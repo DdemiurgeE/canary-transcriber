@@ -63,6 +63,7 @@ struct BatchConfig: Codable {
     let chunkDuration: Double?
     let overlapDuration: Double
     let diarization: Bool
+    let speakerCount: Int?
 }
 
 struct TranscriptionProfile: Identifiable, Hashable {
@@ -588,6 +589,7 @@ struct ContentView: View {
     @State private var writeNextToSource: Bool = true
     @State private var outputFolder: String = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents/CanaryTranscripts").path
     @State private var diarizationEnabled: Bool = false
+    @State private var diarizationSpeakerCount: String = "2"
 
     @State private var isRunning = false
     @State private var process: Process?
@@ -843,8 +845,16 @@ struct ContentView: View {
                         .disabled(writeNextToSource)
                 }
 
-                Toggle("Speaker diarization (pyannote/speaker-diarization-3.1)", isOn: $diarizationEnabled)
-                    .toggleStyle(.checkbox)
+                HStack(spacing: 8) {
+                    Toggle("Speaker diarization (pyannote)", isOn: $diarizationEnabled)
+                        .toggleStyle(.checkbox)
+                    Text("Speakers")
+                        .foregroundStyle(.secondary)
+                    TextField("auto", text: $diarizationSpeakerCount)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 70)
+                        .disabled(!diarizationEnabled)
+                }
             }
             .padding(.vertical, 4)
         }
@@ -1270,6 +1280,8 @@ struct ContentView: View {
         }
 
         let chunk = Double(chunkDuration.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 30.0
+        let speakerCountText = diarizationSpeakerCount.trimmingCharacters(in: .whitespacesAndNewlines)
+        let forcedSpeakerCount = Int(speakerCountText).flatMap { $0 > 0 ? $0 : nil }
         let config = BatchConfig(
             files: normalizedFiles.map { $0.path },
             outputDir: writeNextToSource ? nil : cleanOutput,
@@ -1281,7 +1293,8 @@ struct ContentView: View {
             timestamps: timestamps,
             chunkDuration: chunk <= 0 ? nil : chunk,
             overlapDuration: 2.0,
-            diarization: diarizationEnabled
+            diarization: diarizationEnabled,
+            speakerCount: diarizationEnabled ? forcedSpeakerCount : nil
         )
 
         let configURL = FileManager.default.temporaryDirectory
@@ -1323,6 +1336,11 @@ try:
     chunk_duration = cfg.get("chunkDuration", 30.0)
     overlap_duration = float(cfg.get("overlapDuration", 2.0))
     diarization_enabled = bool(cfg.get("diarization", False))
+    speaker_count = cfg.get("speakerCount")
+    try:
+        speaker_count = int(speaker_count) if speaker_count else None
+    except Exception:
+        speaker_count = None
 
     def emit(kind, **payload):
         payload["kind"] = kind
@@ -1494,7 +1512,12 @@ try:
                 waveform, sr = torchaudio.load(wav_path)
                 if waveform.shape[0] > 1:
                     waveform = waveform.mean(dim=0, keepdim=True)
-                result = pipeline({"waveform": waveform, "sample_rate": sr})
+                kwargs = {"waveform": waveform, "sample_rate": sr}
+                if speaker_count:
+                    print(f"Stage: diarization forced speakers={speaker_count}", flush=True)
+                    result = pipeline(kwargs, num_speakers=speaker_count)
+                else:
+                    result = pipeline(kwargs)
                 segments = []
                 for segment, _, label in result.speaker_diarization.itertracks(yield_label=True):
                     segments.append({"speaker": label, "start": round(segment.start, 3), "end": round(segment.end, 3)})
@@ -1504,6 +1527,44 @@ try:
         except Exception as exc:
             print(f"WARNING: diarization init failed: {exc}", flush=True)
             return None
+
+    def extract_wav_segment(source_wav, output_wav, start, end):
+        ffmpeg = resolve_ffmpeg()
+        duration = max(0.0, float(end) - float(start))
+        subprocess.run([
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-ss", f"{float(start):.3f}", "-i", str(source_wav),
+            "-t", f"{duration:.3f}",
+            "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
+            str(output_wav),
+        ], check=True)
+        return output_wav
+
+    def merge_speaker_segments(segments, max_seconds, min_seconds=0.6, max_gap=0.8):
+        if not segments:
+            return []
+        max_seconds = float(max_seconds or 30.0)
+        merged = []
+        for seg in sorted(segments, key=lambda s: (s["start"], s["end"])):
+            start = float(seg["start"])
+            end = float(seg["end"])
+            if end - start < min_seconds:
+                continue
+            speaker = seg["speaker"]
+            if merged and merged[-1]["speaker"] == speaker:
+                gap = start - float(merged[-1]["end"])
+                candidate_duration = end - float(merged[-1]["start"])
+                if 0 <= gap <= max_gap and candidate_duration <= max_seconds:
+                    merged[-1]["end"] = round(end, 3)
+                    continue
+            # Split very long same-speaker regions so ASR still works like normal chunks.
+            cur = start
+            while end - cur > max_seconds:
+                merged.append({"speaker": speaker, "start": round(cur, 3), "end": round(cur + max_seconds, 3)})
+                cur += max_seconds
+            if end - cur >= min_seconds:
+                merged.append({"speaker": speaker, "start": round(cur, 3), "end": round(end, 3)})
+        return merged
 
     print(f"Stage: STT preflight; files={len(files)} profile={profile_id} runtime={runtime}", flush=True)
     for p in files:
@@ -1524,51 +1585,61 @@ try:
         try:
             parts = []
             chunk_records = []
+            diarize_segments = None
+            transcription_segments = None
             with tempfile.TemporaryDirectory(prefix="canary-transcriber-") as tmp:
                 chunks, duration, effective_chunk = make_wav_chunks(audio_path, Path(tmp), chunk_duration)
+                normalized = Path(tmp) / "normalized.wav"
 
                 # Run diarization on normalized WAV (created by make_wav_chunks)
-                diarize_segments = None
                 if diarize_func:
-                    normalized = Path(tmp) / "normalized.wav"
                     try:
                         diarize_segments = diarize_func(normalized)
                         print(f"Stage: diarization found {len(diarize_segments)} speaker segments", flush=True)
                         for seg in diarize_segments:
                             print(f"  {seg['speaker']}: {seg['start']:.1f}s - {seg['end']:.1f}s", flush=True)
+                        transcription_segments = merge_speaker_segments(diarize_segments, effective_chunk)
+                        print(f"Stage: merged into {len(transcription_segments)} speaker transcription segments", flush=True)
                     except Exception as exc:
                         print(f"WARNING: diarization failed for {audio_path}: {exc}", flush=True)
+                        diarize_segments = None
+                        transcription_segments = None
 
-                for chunk_index, chunk_start, chunk_path in chunks:
-                    # Determine speaker for this chunk by overlap with diarization segments
-                    speaker_label = None
-                    if diarize_segments:
-                        chunk_end = chunk_start + effective_chunk
-                        best_overlap = 0.0
-                        for seg in diarize_segments:
-                            overlap_start = max(chunk_start, seg["start"])
-                            overlap_end = min(chunk_end, seg["end"])
-                            overlap = max(0.0, overlap_end - overlap_start)
-                            if overlap > best_overlap:
-                                best_overlap = overlap
-                                speaker_label = seg["speaker"]
-
-                    print(f"Stage: STT chunk {chunk_index + 1}/{len(chunks)} start={chunk_start:.1f}s speaker={speaker_label or 'none'} runtime={runtime}", flush=True)
-                    chunk_text = transcribe_chunk(chunk_path)
-                    chunk_text = chunk_text.strip()
-                    if chunk_text:
-                        if speaker_label:
-                            parts.append(f"[{speaker_label}]: {chunk_text}")
-                        else:
+                if transcription_segments:
+                    for segment_index, seg in enumerate(transcription_segments):
+                        speaker_label = seg["speaker"]
+                        segment_start = float(seg["start"])
+                        segment_end = float(seg["end"])
+                        segment_path = Path(tmp) / f"speaker_segment_{segment_index:04d}.wav"
+                        extract_wav_segment(normalized, segment_path, segment_start, segment_end)
+                        print(f"Stage: STT speaker segment {segment_index + 1}/{len(transcription_segments)} speaker={speaker_label} start={segment_start:.1f}s end={segment_end:.1f}s runtime={runtime}", flush=True)
+                        segment_text = transcribe_chunk(segment_path).strip()
+                        if segment_text:
+                            parts.append(f"[{speaker_label}]: {segment_text}")
+                        chunk_records.append({
+                            "index": segment_index,
+                            "start": segment_start,
+                            "end": segment_end,
+                            "path": str(segment_path.name),
+                            "speaker": speaker_label,
+                            "chars": len(segment_text),
+                            "text": segment_text,
+                        })
+                else:
+                    for chunk_index, chunk_start, chunk_path in chunks:
+                        print(f"Stage: STT chunk {chunk_index + 1}/{len(chunks)} start={chunk_start:.1f}s runtime={runtime}", flush=True)
+                        chunk_text = transcribe_chunk(chunk_path).strip()
+                        if chunk_text:
                             parts.append(chunk_text)
-                    chunk_records.append({
-                        "index": chunk_index,
-                        "start": chunk_start,
-                        "path": str(chunk_path.name),
-                        "speaker": speaker_label,
-                        "chars": len(chunk_text),
-                        "text": chunk_text,
-                    })
+                        chunk_records.append({
+                            "index": chunk_index,
+                            "start": chunk_start,
+                            "end": chunk_start + effective_chunk,
+                            "path": str(chunk_path.name),
+                            "speaker": None,
+                            "chars": len(chunk_text),
+                            "text": chunk_text,
+                        })
 
             text = "\n".join(parts).strip()
             txt_path.write_text(text, encoding="utf-8")
@@ -1582,8 +1653,12 @@ try:
                 f"date: {datetime.now().isoformat()}",
             ]
             if diarization_enabled and diarize_segments is not None:
+                unique_speakers = sorted({seg["speaker"] for seg in diarize_segments})
                 md_fields.append(f"diarization: pyannote/speaker-diarization-3.1")
-                md_fields.append(f"speakers: {len(diarize_segments)} segments")
+                if speaker_count:
+                    md_fields.append(f"speaker_count: {speaker_count}")
+                md_fields.append(f"speakers: {len(unique_speakers)}")
+                md_fields.append(f"diarization_segments: {len(diarize_segments)}")
             md_content = "---\n" + "\n".join(md_fields) + "\n---\n\n"
             md_content += f"# Transcript: {audio_path.name}\n\n{text}\n"
             md_path.write_text(md_content, encoding="utf-8")
@@ -1598,11 +1673,13 @@ try:
                 "chunk_duration": chunk_duration,
                 "overlap_duration": 0,
                 "diarization": diarization_enabled,
+                "speaker_count": speaker_count,
                 "text": text,
                 "chunks": chunk_records,
             }
             if diarization_enabled and diarize_segments is not None:
                 payload["diarization_segments"] = diarize_segments
+                payload["transcription_segments"] = transcription_segments or []
             json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
             ok += 1
             emit("file_done", path=str(audio_path), txt=str(txt_path), json=str(json_path), md=str(md_path), chars=len(text))
@@ -1661,6 +1738,7 @@ Model: \(config.model)
 Language: \(config.language)
 Chunk duration: \(config.chunkDuration.map { String($0) } ?? "off")
 Diarization: \(config.diarization ? "yes (pyannote/speaker-diarization-3.1)" : "off")
+Speakers: \(config.speakerCount.map { String($0) } ?? "auto")
 Files: \(config.files.count)
 Output: \(config.writeNextToSource ? "next to source files" : (config.outputDir ?? ""))
 PATH: \(env["PATH"] ?? "")
