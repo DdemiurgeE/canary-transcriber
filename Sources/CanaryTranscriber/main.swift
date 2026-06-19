@@ -62,6 +62,7 @@ struct BatchConfig: Codable {
     let timestamps: Bool
     let chunkDuration: Double?
     let overlapDuration: Double
+    let diarization: Bool
 }
 
 struct TranscriptionProfile: Identifiable, Hashable {
@@ -586,6 +587,7 @@ struct ContentView: View {
     @State private var timestamps: Bool = false
     @State private var writeNextToSource: Bool = true
     @State private var outputFolder: String = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents/CanaryTranscripts").path
+    @State private var diarizationEnabled: Bool = false
 
     @State private var isRunning = false
     @State private var process: Process?
@@ -840,6 +842,9 @@ struct ContentView: View {
                     Button("Choose") { chooseOutputFolder() }
                         .disabled(writeNextToSource)
                 }
+
+                Toggle("Speaker diarization (pyannote/speaker-diarization-3.1)", isOn: $diarizationEnabled)
+                    .toggleStyle(.checkbox)
             }
             .padding(.vertical, 4)
         }
@@ -1275,7 +1280,8 @@ struct ContentView: View {
             language: language.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedProfile.language : language.trimmingCharacters(in: .whitespacesAndNewlines),
             timestamps: timestamps,
             chunkDuration: chunk <= 0 ? nil : chunk,
-            overlapDuration: 2.0
+            overlapDuration: 2.0,
+            diarization: diarizationEnabled
         )
 
         let configURL = FileManager.default.temporaryDirectory
@@ -1316,6 +1322,7 @@ try:
     timestamps = bool(cfg.get("timestamps", False))
     chunk_duration = cfg.get("chunkDuration", 30.0)
     overlap_duration = float(cfg.get("overlapDuration", 2.0))
+    diarization_enabled = bool(cfg.get("diarization", False))
 
     def emit(kind, **payload):
         payload["kind"] = kind
@@ -1465,6 +1472,39 @@ try:
 
         raise RuntimeError(f"Unknown runtime: {runtime_name}. Supported: canary_mlx, mlx_whisper, mlx_audio_cli")
 
+    def make_diarizer():
+        try:
+            import torch, os
+            from pyannote.audio import Pipeline
+            token_file = os.path.expanduser("~/.cache/huggingface/token")
+            if not os.path.exists(token_file):
+                print("WARNING: HF token not found at ~/.cache/huggingface/token; skipping diarization", flush=True)
+                return None
+            token = open(token_file).read().strip()
+            print("Stage: loading pyannote/speaker-diarization-3.1...", flush=True)
+            pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=token)
+            if torch.backends.mps.is_available():
+                pipeline.to(torch.device("mps"))
+                print("Stage: diarization pipeline on MPS", flush=True)
+            else:
+                print("Stage: diarization pipeline on CPU", flush=True)
+
+            def diarize(wav_path):
+                import torchaudio
+                waveform, sr = torchaudio.load(wav_path)
+                if waveform.shape[0] > 1:
+                    waveform = waveform.mean(dim=0, keepdim=True)
+                result = pipeline({"waveform": waveform, "sample_rate": sr})
+                segments = []
+                for segment, _, label in result.speaker_diarization.itertracks(yield_label=True):
+                    segments.append({"speaker": label, "start": round(segment.start, 3), "end": round(segment.end, 3)})
+                return segments
+
+            return diarize
+        except Exception as exc:
+            print(f"WARNING: diarization init failed: {exc}", flush=True)
+            return None
+
     print(f"Stage: STT preflight; files={len(files)} profile={profile_id} runtime={runtime}", flush=True)
     for p in files:
         if not p.exists():
@@ -1473,6 +1513,7 @@ try:
         output_dir.mkdir(parents=True, exist_ok=True)
 
     transcribe_chunk = make_transcriber(runtime, model_id)
+    diarize_func = make_diarizer() if diarization_enabled else None
 
     ok = 0
     failed = 0
@@ -1485,36 +1526,66 @@ try:
             chunk_records = []
             with tempfile.TemporaryDirectory(prefix="canary-transcriber-") as tmp:
                 chunks, duration, effective_chunk = make_wav_chunks(audio_path, Path(tmp), chunk_duration)
+
+                # Run diarization on normalized WAV (created by make_wav_chunks)
+                diarize_segments = None
+                if diarize_func:
+                    normalized = Path(tmp) / "normalized.wav"
+                    try:
+                        diarize_segments = diarize_func(normalized)
+                        print(f"Stage: diarization found {len(diarize_segments)} speaker segments", flush=True)
+                        for seg in diarize_segments:
+                            print(f"  {seg['speaker']}: {seg['start']:.1f}s - {seg['end']:.1f}s", flush=True)
+                    except Exception as exc:
+                        print(f"WARNING: diarization failed for {audio_path}: {exc}", flush=True)
+
                 for chunk_index, chunk_start, chunk_path in chunks:
-                    print(f"Stage: STT chunk {chunk_index + 1}/{len(chunks)} start={chunk_start:.1f}s runtime={runtime}", flush=True)
+                    # Determine speaker for this chunk by overlap with diarization segments
+                    speaker_label = None
+                    if diarize_segments:
+                        chunk_end = chunk_start + effective_chunk
+                        best_overlap = 0.0
+                        for seg in diarize_segments:
+                            overlap_start = max(chunk_start, seg["start"])
+                            overlap_end = min(chunk_end, seg["end"])
+                            overlap = max(0.0, overlap_end - overlap_start)
+                            if overlap > best_overlap:
+                                best_overlap = overlap
+                                speaker_label = seg["speaker"]
+
+                    print(f"Stage: STT chunk {chunk_index + 1}/{len(chunks)} start={chunk_start:.1f}s speaker={speaker_label or 'none'} runtime={runtime}", flush=True)
                     chunk_text = transcribe_chunk(chunk_path)
                     chunk_text = chunk_text.strip()
                     if chunk_text:
-                        parts.append(chunk_text)
+                        if speaker_label:
+                            parts.append(f"[{speaker_label}]: {chunk_text}")
+                        else:
+                            parts.append(chunk_text)
                     chunk_records.append({
                         "index": chunk_index,
                         "start": chunk_start,
                         "path": str(chunk_path.name),
+                        "speaker": speaker_label,
                         "chars": len(chunk_text),
                         "text": chunk_text,
                     })
 
             text = "\n".join(parts).strip()
             txt_path.write_text(text, encoding="utf-8")
-            # Write Markdown with frontmatter
-            md_content = f"""---
-source: {audio_path.name}
-profile: {profile_id}
-runtime: {runtime}
-model: {model_id}
-language: {language}
-date: {datetime.now().isoformat()}
----
-
-# Transcript: {audio_path.name}
-
-{text}
-"""
+            # Build frontmatter fields
+            md_fields = [
+                f"source: {audio_path.name}",
+                f"profile: {profile_id}",
+                f"runtime: {runtime}",
+                f"model: {model_id}",
+                f"language: {language}",
+                f"date: {datetime.now().isoformat()}",
+            ]
+            if diarization_enabled and diarize_segments is not None:
+                md_fields.append(f"diarization: pyannote/speaker-diarization-3.1")
+                md_fields.append(f"speakers: {len(diarize_segments)} segments")
+            md_content = "---\n" + "\n".join(md_fields) + "\n---\n\n"
+            md_content += f"# Transcript: {audio_path.name}\n\n{text}\n"
             md_path.write_text(md_content, encoding="utf-8")
             payload = {
                 "audio": str(audio_path),
@@ -1526,9 +1597,12 @@ date: {datetime.now().isoformat()}
                 "manual_chunking": True,
                 "chunk_duration": chunk_duration,
                 "overlap_duration": 0,
+                "diarization": diarization_enabled,
                 "text": text,
                 "chunks": chunk_records,
             }
+            if diarization_enabled and diarize_segments is not None:
+                payload["diarization_segments"] = diarize_segments
             json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
             ok += 1
             emit("file_done", path=str(audio_path), txt=str(txt_path), json=str(json_path), md=str(md_path), chars=len(text))
@@ -1586,6 +1660,7 @@ Runtime: \(config.runtime)
 Model: \(config.model)
 Language: \(config.language)
 Chunk duration: \(config.chunkDuration.map { String($0) } ?? "off")
+Diarization: \(config.diarization ? "yes (pyannote/speaker-diarization-3.1)" : "off")
 Files: \(config.files.count)
 Output: \(config.writeNextToSource ? "next to source files" : (config.outputDir ?? ""))
 PATH: \(env["PATH"] ?? "")
