@@ -20,7 +20,7 @@ A small native macOS SwiftUI app for batch transcription with local MLX speech-t
   - `fast — Whisper Turbo`: `mlx-community/whisper-large-v3-turbo` via `mlx-whisper`.
   - `accurate — Whisper large-v3`: `mlx-community/whisper-large-v3-mlx` via `mlx-whisper`.
   - `multilingual European — Canary 1B v2`: `CogniSoftOrg/canary-1b-v2-mlx-bf16` via `mlx-audio`.
-- Russian transcription support for Canary v2 uses explicit `source_lang=ru` and `target_lang=ru` so the model transcribes Russian instead of translating to English.
+  - Russian transcription support for Canary v2 uses explicit `source_lang=ru` and `target_lang=ru` so the model transcribes Russian instead of translating to English.
   - `realtime — Voxtral Mini Realtime`: `mlx-community/Voxtral-Mini-4B-Realtime-2602-4bit` via `mlx-audio`.
 - Default language: `ru`.
 - Normalizes input with `ffmpeg` to 16 kHz mono PCM WAV.
@@ -28,6 +28,8 @@ A small native macOS SwiftUI app for batch transcription with local MLX speech-t
 - Writes outputs next to the source file or into a selected output folder:
   - `<source>.canary.txt`
   - `<source>.canary.json`
+  - `<source>.canary.md` (structured meeting workspace when diarization is enabled)
+- When diarization is enabled, Settings also accepts optional speaker aliases like `SPEAKER_00 = Alice` and stores them locally so they reappear on the next launch.
 - Keeps a persistent troubleshooting log:
   - `~/Documents/CanaryTranscripts/canary-transcriber.log`
 

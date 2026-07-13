@@ -5,12 +5,28 @@ let package = Package(
     name: "canary-transcriber",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "canary-transcriber", targets: ["CanaryTranscriber"])
+        .library(name: "CanaryTranscriber", targets: ["CanaryTranscriber"]),
+        .executable(name: "canary-transcriber", targets: ["CanaryTranscriberApp"])
     ],
     targets: [
-        .executableTarget(
+        .target(
+            name: "CanaryTranscriberCore",
+            path: "Sources/CanaryTranscriberCore"
+        ),
+        .target(
             name: "CanaryTranscriber",
-            path: "Sources/CanaryTranscriber"
+            dependencies: ["CanaryTranscriberCore"],
+            path: "Sources/CanaryTranscriberLib"
+        ),
+        .executableTarget(
+            name: "CanaryTranscriberApp",
+            dependencies: ["CanaryTranscriber"],
+            path: "Sources/CanaryTranscriberApp"
+        ),
+        .testTarget(
+            name: "CanaryTranscriberTests",
+            dependencies: ["CanaryTranscriberCore"],
+            path: "Tests/CanaryTranscriberTests"
         )
     ]
 )
