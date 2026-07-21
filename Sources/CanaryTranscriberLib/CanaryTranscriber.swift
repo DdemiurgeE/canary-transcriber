@@ -1270,6 +1270,12 @@ public struct ContentView: View {
             speakerCount: diarizationEnabled ? forcedSpeakerCount : nil,
             speakerAliases: diarizationEnabled ? parsedSpeakerAliases() : [:]
         )
+        do {
+            _ = try config.validated()
+        } catch {
+            logs += "❌ Invalid transcription configuration: \(error.localizedDescription)\n"
+            return
+        }
 
         let configURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("canary-transcriber-\(UUID().uuidString).json")
@@ -1566,13 +1572,23 @@ try:
             row["alias"] = speaker_aliases.get(row["speaker"], "")
         return rows
 
+    def yaml_scalar(value):
+        value = str(value)
+        if value and all(ch.isalnum() or ch in "-_.:/" for ch in value):
+            return value
+        return json.dumps(value, ensure_ascii=False)
+
+    def format_hms(seconds):
+        total = max(0, int(float(seconds or 0)))
+        return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
+
     def build_markdown(audio_path, text, profile_id, runtime, model_id, language, diarization_enabled, diarize_segments, transcription_segments, speaker_summary, speaker_count):
         md_fields = [
-            f"source: {audio_path.name}",
-            f"profile: {profile_id}",
-            f"runtime: {runtime}",
-            f"model: {model_id}",
-            f"language: {language}",
+            f"source: {yaml_scalar(audio_path.name)}",
+            f"profile: {yaml_scalar(profile_id)}",
+            f"runtime: {yaml_scalar(runtime)}",
+            f"model: {yaml_scalar(model_id)}",
+            f"language: {yaml_scalar(language)}",
             f"date: {datetime.now().isoformat()}",
         ]
 
@@ -1590,12 +1606,13 @@ try:
         md_content = "---\n" + "\n".join(md_fields) + "\n---\n\n"
 
         if workspace_enabled:
-            md_content += f"# Meeting Transcript: {audio_path.name}\n\n"
+            md_content += f"# Transcript: {audio_path.name}\n\n"
             md_content += "## Speakers\n\n"
-            md_content += "| Speaker | Segments | Time (s) | Alias | Notes |\n|---|---:|---:|---|---|\n"
+            md_content += "| Speaker | Segments | Duration | Alias |\n|---|---:|---:|---|\n"
             for row in speaker_summary:
                 alias = str(row.get("alias") or "")
-                md_content += f"| {row['speaker']} | {row['segments']} | {row['seconds']:.1f} | {alias} | |\n"
+                display_speaker = f"{alias} ({row['speaker']})" if alias else row["speaker"]
+                md_content += f"| {display_speaker} | {row['segments']} | {format_hms(row['seconds'])} | {alias} |\n"
 
             md_content += "\n## Transcript\n\n"
             transcript_lines = []
@@ -1608,9 +1625,9 @@ try:
                     continue
                 display_speaker = speaker_aliases.get(speaker, speaker)
                 if display_speaker == speaker:
-                    transcript_lines.append(f"**{speaker}** ({start:.1f}–{end:.1f}s): {seg_text}")
+                    transcript_lines.append(f"**{speaker}** [{format_hms(start)} - {format_hms(end)}]: {seg_text}")
                 else:
-                    transcript_lines.append(f"**{display_speaker}** ({speaker}, {start:.1f}–{end:.1f}s): {seg_text}")
+                    transcript_lines.append(f"**{display_speaker} ({speaker})** [{format_hms(start)} - {format_hms(end)}]: {seg_text}")
 
             if transcript_lines:
                 md_content += "\n\n".join(transcript_lines) + "\n\n"
@@ -1861,34 +1878,34 @@ Persistent log: \(persistentLogPath())
     }
 
     private func handleEventLine(_ jsonText: String) {
-        guard let data = jsonText.data(using: .utf8),
-              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let kind = payload["kind"] as? String else {
+        guard let event = TranscriptionEventParser.parseLine("CANARY_EVENT \(jsonText)") else {
             logs += "CANARY_EVENT parse failed: \(jsonText)\n"
             return
         }
 
-        switch kind {
-        case "file_started":
-            if let path = payload["path"] as? String {
-                updateStatus(path: path, status: "running")
-            }
-        case "file_done":
-            if let path = payload["path"] as? String {
-                updateStatus(path: path, status: "done")
-            }
-            let txt = payload["txt"] as? String ?? ""
-            let chars = payload["chars"] as? Int ?? 0
-            logs += "✅ Done: \(txt) (chars=\(chars))\n"
-        case "file_failed":
-            if let path = payload["path"] as? String {
-                updateStatus(path: path, status: "failed")
-            }
-            logs += "❌ Failed: \(payload["path"] ?? "") — \(payload["error"] ?? "unknown")\n"
-        case "batch_done":
-            logs += "Batch summary: ok=\(payload["ok"] ?? 0), failed=\(payload["failed"] ?? 0), total=\(payload["total"] ?? 0)\n"
-        default:
-            logs += "Event: \(jsonText)\n"
+        switch event {
+        case .fileStarted(let path, _):
+            updateStatus(path: path, status: "running")
+        case .fileCompleted(let path, let textPath, _, _):
+            updateStatus(path: path, status: "done")
+            logs += "✅ Done: \(textPath ?? "")\n"
+        case .fileFailed(let path, let message):
+            updateStatus(path: path, status: "failed")
+            logs += "❌ Failed: \(path) — \(message)\n"
+        case .batchCompleted(_, let message):
+            logs += "Batch summary: \(message ?? "completed")\n"
+        case .warning(let message):
+            logs += "⚠️ \(message)\n"
+        case .error(let message, let code):
+            let suffix = code.map { " (code \($0))" } ?? ""
+            logs += "❌ \(message)\(suffix)\n"
+        case .stage(let name, let file):
+            let suffix = file.map { " — \($0)" } ?? ""
+            logs += "Stage: \(name)\(suffix)\n"
+        case .chunkCompleted(let index, let start, let chars):
+            logs += "Chunk \(index) at \(start)s completed (chars=\(chars))\n"
+        case .batchStarted, .unknown:
+            break
         }
     }
 
