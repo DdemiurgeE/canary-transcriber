@@ -24,6 +24,14 @@ final class TranscriptionEventTests: XCTestCase {
         XCTAssertEqual(warning, .warning(message: "HF token missing"))
     }
 
+    func testParsesDiarizationProgressStages() throws {
+        let loading = try XCTUnwrap(TranscriptionEventParser.parseLine("CANARY_EVENT {\"kind\":\"stage\",\"name\":\"diarization_model_loading\"}"))
+        XCTAssertEqual(loading, .stage(name: "diarization_model_loading", file: nil))
+
+        let running = try XCTUnwrap(TranscriptionEventParser.parseLine("CANARY_EVENT {\"kind\":\"stage\",\"name\":\"speaker_segment_transcription\",\"file\":\"meeting.m4a\",\"total\":3}"))
+        XCTAssertEqual(running, .stage(name: "speaker_segment_transcription", file: "meeting.m4a"))
+    }
+
     func testNonEventLineIsIgnored() {
         XCTAssertNil(TranscriptionEventParser.parseLine("Stage: normalizing audio"))
     }

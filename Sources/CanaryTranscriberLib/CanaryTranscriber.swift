@@ -153,9 +153,7 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
         }
 
         static func isUsableAudioFile(_ url: URL?) -> Bool {
-            guard let url, FileManager.default.fileExists(atPath: url.path) else { return false }
-            let size = ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value) ?? 0
-            return size > 1024
+            CaptureFileValidator.isUsableAudioFile(url)
         }
     }
 
@@ -221,10 +219,10 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
             engine.stop()
             file = nil
 
-            if RealtimeAudioFileWriter.isUsableAudioFile(url), recordedFrames >= 4_800 {
+            if CaptureFileValidator.isUsableAudioFile(url), recordedFrames >= CaptureFileValidator.minimumMicrophoneFrames {
                 completion(.success(url))
             } else {
-                completion(.failure(NSError(domain: "CanaryAppAudioCapture", code: 18, userInfo: [NSLocalizedDescriptionKey: "Микрофон записал слишком мало данных (\(recordedFrames) frames). Проверь выбранное устройство и Microphone permission."])))
+                completion(.failure(NSError(domain: "CanaryAppAudioCapture", code: 18, userInfo: [NSLocalizedDescriptionKey: CaptureDiagnostic.emptyOrTinyFile(url).description])))
             }
         }
 
@@ -1501,14 +1499,22 @@ try:
         raise RuntimeError(f"Unknown runtime: {runtime_name}. Supported: canary_mlx, mlx_whisper, mlx_audio_cli")
 
     def make_diarizer():
+        emit("stage", name="diarization_model_loading")
         try:
             import torch, os
             from pyannote.audio import Pipeline
             token_file = os.path.expanduser("~/.cache/huggingface/token")
             if not os.path.exists(token_file):
-                print("WARNING: HF token not found at ~/.cache/huggingface/token; skipping diarization", flush=True)
+                warning = "HuggingFace token not found; diarization disabled for this batch. Continuing speakerless."
+                emit("warning", message=warning)
+                print("WARNING: " + warning, flush=True)
                 return None
             token = open(token_file).read().strip()
+            if not token:
+                warning = "HuggingFace token is empty; diarization disabled for this batch. Continuing speakerless."
+                emit("warning", message=warning)
+                print("WARNING: " + warning, flush=True)
+                return None
             print("Stage: loading pyannote/speaker-diarization-3.1...", flush=True)
             pipeline = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", token=token)
             if torch.backends.mps.is_available():
@@ -1518,10 +1524,15 @@ try:
                 print("Stage: diarization pipeline on CPU", flush=True)
 
             def diarize(wav_path):
+                emit("stage", name="diarization_running")
                 import torchaudio
                 waveform, sr = torchaudio.load(wav_path)
                 if waveform.shape[0] > 1:
                     waveform = waveform.mean(dim=0, keepdim=True)
+                if waveform.shape[-1] < sr * 10:
+                    warning = "Audio is shorter than 10 seconds; skipping diarization and continuing speakerless."
+                    emit("warning", message=warning)
+                    return []
                 kwargs = {"waveform": waveform, "sample_rate": sr}
                 if speaker_count:
                     print(f"Stage: diarization forced speakers={speaker_count}", flush=True)
@@ -1531,11 +1542,14 @@ try:
                 segments = []
                 for segment, _, label in result.speaker_diarization.itertracks(yield_label=True):
                     segments.append({"speaker": label, "start": round(segment.start, 3), "end": round(segment.end, 3)})
+                emit("stage", name="diarization_completed", segments=len(segments))
                 return segments
 
             return diarize
         except Exception as exc:
-            print(f"WARNING: diarization init failed: {exc}", flush=True)
+            warning = f"Diarization initialization failed ({exc}); continuing speakerless."
+            emit("warning", message=warning)
+            print("WARNING: " + warning, flush=True)
             return None
 
     def extract_wav_segment(source_wav, output_wav, start, end):
@@ -1733,6 +1747,7 @@ try:
 
                 # Run diarization on normalized WAV (created by make_wav_chunks)
                 if diarize_func:
+                    emit("stage", name="diarization_running", file=str(audio_path))
                     try:
                         diarize_segments = diarize_func(normalized)
                         print(f"Stage: diarization found {len(diarize_segments)} speaker segments", flush=True)
@@ -1741,11 +1756,14 @@ try:
                         transcription_segments = merge_speaker_segments(diarize_segments, effective_chunk)
                         print(f"Stage: merged into {len(transcription_segments)} speaker transcription segments", flush=True)
                     except Exception as exc:
-                        print(f"WARNING: diarization failed for {audio_path}: {exc}", flush=True)
+                        warning = f"Diarization failed for {audio_path.name} ({exc}); continuing speakerless."
+                        emit("warning", message=warning)
+                        print("WARNING: " + warning, flush=True)
                         diarize_segments = None
                         transcription_segments = None
 
                 if transcription_segments:
+                    emit("stage", name="speaker_segment_transcription", file=str(audio_path), total=len(transcription_segments))
                     for segment_index, seg in enumerate(transcription_segments):
                         speaker_label = seg["speaker"]
                         segment_start = float(seg["start"])
@@ -1782,6 +1800,7 @@ try:
                         })
 
             text = "\n".join(parts).strip()
+            emit("stage", name="workspace_writing", file=str(audio_path))
             txt_path.write_text(text, encoding="utf-8")
             speaker_summary = summarize_speakers(diarize_segments, transcription_segments)
             md_content = build_markdown(audio_path, text, profile_id, runtime, model_id, language, diarization_enabled, diarize_segments, transcription_segments, speaker_summary, speaker_count)
