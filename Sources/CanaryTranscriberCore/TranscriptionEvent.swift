@@ -5,7 +5,7 @@ public enum TranscriptionEvent: Equatable {
     case fileStarted(path: String, index: Int)
     case stage(name: String, file: String?)
     case chunkCompleted(index: Int, start: Double, chars: Int)
-    case fileCompleted(path: String, textPath: String?, jsonPath: String?, markdownPath: String?)
+    case fileCompleted(path: String, textPath: String?, jsonPath: String?, markdownPath: String?, chars: Int?)
     case fileFailed(path: String, message: String)
     case warning(message: String)
     case error(message: String, code: Int?)
@@ -53,7 +53,8 @@ public enum TranscriptionEventParser {
                 path: string(payload, "file") ?? string(payload, "path") ?? "",
                 textPath: string(payload, "txt"),
                 jsonPath: string(payload, "json"),
-                markdownPath: string(payload, "md")
+                markdownPath: string(payload, "md"),
+                chars: int(payload, "chars")
             )
         case "file_failed":
             return .fileFailed(path: string(payload, "file") ?? string(payload, "path") ?? "", message: string(payload, "error") ?? string(payload, "message") ?? "unknown")
@@ -67,9 +68,8 @@ public enum TranscriptionEventParser {
             return .batchCompleted(success: success, message: string(payload, "message") ?? "ok=\(int(payload, "ok") ?? 0), failed=\(failed), total=\(int(payload, "total") ?? 0)")
         default:
             return .unknown(kind: kind, payload: payload.reduce(into: [:]) { result, item in
-                if let value = item.value as? CustomStringConvertible {
-                    result[item.key] = value.description
-                }
+                if let value = item.value as? Bool { result[item.key] = value ? "true" : "false" }
+                else if let value = item.value as? CustomStringConvertible { result[item.key] = value.description }
             })
         }
     }

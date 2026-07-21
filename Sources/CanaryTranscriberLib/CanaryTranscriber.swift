@@ -544,8 +544,9 @@ public struct ContentView: View {
     @AppStorage(speakerAliasesStorageKey) private var speakerAliasesText: String = ""
 
     @State private var isRunning = false
-    @State private var process: Process?
+    @State private var processTask: (any ProcessRunningTask)?
     @State private var currentConfigPath: String?
+    private let processRunner = ProcessRunner()
     @State private var isFileDropTargeted = false
 
     @StateObject private var appAudioCapture = AppAudioCaptureController()
@@ -1265,7 +1266,7 @@ public struct ContentView: View {
             language: language.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedProfile.language : language.trimmingCharacters(in: .whitespacesAndNewlines),
             timestamps: timestamps,
             chunkDuration: chunk <= 0 ? nil : chunk,
-            overlapDuration: 2.0,
+            overlapDuration: chunk <= 0 ? 0 : 2.0,
             diarization: diarizationEnabled,
             speakerCount: diarizationEnabled ? forcedSpeakerCount : nil,
             speakerAliases: diarizationEnabled ? parsedSpeakerAliases() : [:]
@@ -1330,6 +1331,15 @@ try:
         payload["kind"] = kind
         print("CANARY_EVENT " + json.dumps(payload, ensure_ascii=False, default=str), flush=True)
 
+    # Test-only protocol fixture mode. It executes this embedded script's real
+    # event emitter without importing an STT runtime or touching audio files.
+    if cfg.get("_eventFixtures") is not None:
+        for fixture in cfg.get("_eventFixtures") or []:
+            fixture = dict(fixture)
+            kind = str(fixture.pop("kind"))
+            emit(kind, **fixture)
+        raise SystemExit(0)
+
     def output_paths(audio_path):
         base_dir = audio_path.parent if write_next_to_source else output_dir
         base_dir.mkdir(parents=True, exist_ok=True)
@@ -1365,9 +1375,15 @@ try:
         ], check=True)
 
         duration = wav_duration_seconds(normalized)
-        chunk_seconds = float(seconds or 30.0)
+        # nil chunkDuration explicitly disables fixed chunking: transcribe the
+        # normalized file once. overlapDuration is only meaningful with fixed
+        # chunking and is rejected at the Swift boundary when chunking is nil.
+        if seconds is None:
+            print(f"Stage: fixed chunking disabled; using full normalized audio ({duration:.1f}s)", flush=True)
+            return [(0, 0.0, normalized)], duration, duration
+        chunk_seconds = float(seconds)
         if chunk_seconds <= 0:
-            chunk_seconds = 30.0
+            raise ValueError("chunk duration must be positive or null")
         chunks = []
         start = 0.0
         idx = 0
@@ -1383,7 +1399,10 @@ try:
             if out.exists() and out.stat().st_size > 44:
                 chunks.append((idx, start, out))
             idx += 1
-            start += chunk_seconds
+            step = chunk_seconds - overlap_duration
+            if step <= 0:
+                raise ValueError("overlap duration must be smaller than chunk duration")
+            start += step
         print(f"Stage: prepared {len(chunks)} wav chunks; duration={duration:.1f}s chunk={chunk_seconds:.1f}s", flush=True)
         return chunks, duration, chunk_seconds
 
@@ -1428,29 +1447,36 @@ try:
             except Exception as exc:
                 raise RuntimeError("Python package mlx-audio is required for Parakeet/Canary v2/Voxtral profiles. Install: python -m pip install 'mlx-audio[stt]' or python -m pip install mlx-audio") from exc
             print("Stage: mlx_audio CLI ready", flush=True)
+
+            def build_mlx_audio_command(path, out_file):
+                cmd = [
+                    sys.executable, "-m", "mlx_audio.stt.generate",
+                    "--model", model_name,
+                    "--audio", str(path),
+                    "--output-path", str(out_file),
+                    "--format", "txt",
+                ]
+                lang_kwargs = {}
+                if language:
+                    cmd.extend(["--language", language])
+                    lang_kwargs = {"source_lang": language, "target_lang": language}
+                    cmd.extend(["--gen-kwargs", json.dumps(lang_kwargs, ensure_ascii=False)])
+                return cmd, lang_kwargs
+
             def transcribe(path):
                 with tempfile.TemporaryDirectory(prefix="mlx-audio-out-") as out_tmp:
                     out_dir = Path(out_tmp)
                     out_file = out_dir / "transcript.txt"
-                    cmd = [
-                        sys.executable, "-m", "mlx_audio.stt.generate",
-                        "--model", model_name,
-                        "--audio", str(path),
-                        "--output-path", str(out_file),
-                        "--format", "txt",
-                    ]
-                    if language:
-                        cmd.extend(["--language", language])
-                        lang_kwargs = json.dumps({"source_lang": language, "target_lang": language}, ensure_ascii=False)
-                        cmd.extend(["--gen-kwargs", lang_kwargs])
-                    print("Stage: mlx-audio command language=" + str(language) + " gen_kwargs=" + (lang_kwargs if language else "{}"), flush=True)
+                    cmd, lang_kwargs = build_mlx_audio_command(path, out_file)
+                    print("Stage: mlx-audio command language=" + str(language) + " gen_kwargs=" + json.dumps(lang_kwargs, ensure_ascii=False), flush=True)
                     proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                     output = proc.stdout or ""
-                    if proc.returncode != 0:
-                        if "--language" in cmd:
-                            cmd = [x for x in cmd if x not in ["--language", language]]
-                            proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                            output = proc.stdout or ""
+                    if proc.returncode != 0 and language:
+                        # Compatibility fallback for older mlx-audio versions that
+                        # reject --language; keep gen-kwargs only when possible.
+                        cmd = [x for x in cmd if x not in ["--language", language]]
+                        proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                        output = proc.stdout or ""
                     if proc.returncode != 0:
                         raise RuntimeError(f"mlx-audio CLI failed with code {proc.returncode}: {output[-4000:]}")
                     text_candidates = []
@@ -1578,6 +1604,19 @@ try:
             return value
         return json.dumps(value, ensure_ascii=False)
 
+    def markdown_inline(value):
+        value = str(value).replace("\\", "\\\\")
+        for char in ["`", "*", "_", "[", "]", "|"]:
+            value = value.replace(char, "\\" + char)
+        return value.replace("\r\n", "\n").replace("\r", "\n").replace("\n", " ")
+
+    def markdown_text(value):
+        lines = str(value).replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        return "  \n".join(markdown_inline(line) for line in lines)
+
+    def markdown_cell(value):
+        return markdown_inline(value)
+
     def format_hms(seconds):
         total = max(0, int(float(seconds or 0)))
         return f"{total // 3600:02d}:{(total % 3600) // 60:02d}:{total % 60:02d}"
@@ -1606,13 +1645,13 @@ try:
         md_content = "---\n" + "\n".join(md_fields) + "\n---\n\n"
 
         if workspace_enabled:
-            md_content += f"# Transcript: {audio_path.name}\n\n"
+            md_content += f"# Transcript: {markdown_inline(audio_path.name)}\n\n"
             md_content += "## Speakers\n\n"
             md_content += "| Speaker | Segments | Duration | Alias |\n|---|---:|---:|---|\n"
             for row in speaker_summary:
                 alias = str(row.get("alias") or "")
                 display_speaker = f"{alias} ({row['speaker']})" if alias else row["speaker"]
-                md_content += f"| {display_speaker} | {row['segments']} | {format_hms(row['seconds'])} | {alias} |\n"
+                md_content += f"| {markdown_cell(display_speaker)} | {row['segments']} | {format_hms(row['seconds'])} | {markdown_cell(alias)} |\n"
 
             md_content += "\n## Transcript\n\n"
             transcript_lines = []
@@ -1625,20 +1664,20 @@ try:
                     continue
                 display_speaker = speaker_aliases.get(speaker, speaker)
                 if display_speaker == speaker:
-                    transcript_lines.append(f"**{speaker}** [{format_hms(start)} - {format_hms(end)}]: {seg_text}")
+                    transcript_lines.append(f"**{markdown_inline(speaker)}** [{format_hms(start)} - {format_hms(end)}]: {markdown_text(seg_text)}")
                 else:
-                    transcript_lines.append(f"**{display_speaker} ({speaker})** [{format_hms(start)} - {format_hms(end)}]: {seg_text}")
+                    transcript_lines.append(f"**{markdown_inline(display_speaker + ' (' + speaker + ')')}** [{format_hms(start)} - {format_hms(end)}]: {markdown_text(seg_text)}")
 
             if transcript_lines:
                 md_content += "\n\n".join(transcript_lines) + "\n\n"
             elif text.strip():
                 # Fallback: preserve the actual transcript even when diarization segments
                 # don't carry per-segment text. This avoids empty .md exports.
-                md_content += text.strip() + "\n\n"
+                md_content += markdown_text(text.strip()) + "\n\n"
 
             md_content += "## Summary\n\n- \n\n## Decisions\n\n- \n\n## Action items\n\n- [ ] \n\n## Open questions\n\n- \n"
         else:
-            md_content += f"# Transcript: {audio_path.name}\n\n{text}\n"
+            md_content += f"# Transcript: {markdown_inline(audio_path.name)}\n\n{markdown_text(text)}\n"
 
         return md_content
 
@@ -1651,6 +1690,31 @@ try:
 
     transcribe_chunk = make_transcriber(runtime, model_id)
     diarize_func = make_diarizer() if diarization_enabled else None
+
+    def is_memory_failure(error):
+        message = str(error).lower()
+        return "insufficient memory" in message or "outofmemory" in message or "out of memory" in message
+
+    def transcribe_with_bounded_retry(path, start, end, work_dir, label):
+        try:
+            return transcribe_chunk(path).strip()
+        except RuntimeError as error:
+            duration = max(0.0, float(end) - float(start))
+            if not is_memory_failure(error) or duration <= 5.0:
+                raise
+            midpoint = start + duration / 2.0
+            print(f"WARNING: MLX memory failure for {label}; retrying as two smaller chunks ({duration:.1f}s -> {duration / 2.0:.1f}s)", flush=True)
+            retry_text = []
+            for retry_index, (retry_start, retry_end) in enumerate(((start, midpoint), (midpoint, end))):
+                retry_path = Path(work_dir) / f"{label}_retry_{retry_index:02d}.wav"
+                subprocess.run([
+                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    "-ss", str(retry_start), "-t", str(max(0.01, retry_end - retry_start)),
+                    "-i", str(Path(work_dir) / "normalized.wav"),
+                    "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(retry_path)
+                ], check=True)
+                retry_text.append(transcribe_chunk(retry_path).strip())
+            return "\n".join(text for text in retry_text if text).strip()
 
     ok = 0
     failed = 0
@@ -1689,7 +1753,7 @@ try:
                         segment_path = Path(tmp) / f"speaker_segment_{segment_index:04d}.wav"
                         extract_wav_segment(normalized, segment_path, segment_start, segment_end)
                         print(f"Stage: STT speaker segment {segment_index + 1}/{len(transcription_segments)} speaker={speaker_label} start={segment_start:.1f}s end={segment_end:.1f}s runtime={runtime}", flush=True)
-                        segment_text = transcribe_chunk(segment_path).strip()
+                        segment_text = transcribe_with_bounded_retry(segment_path, segment_start, segment_end, tmp, f"speaker_segment_{segment_index:04d}")
                         if segment_text:
                             parts.append(f"[{speaker_label}]: {segment_text}")
                         chunk_records.append({
@@ -1704,13 +1768,13 @@ try:
                 else:
                     for chunk_index, chunk_start, chunk_path in chunks:
                         print(f"Stage: STT chunk {chunk_index + 1}/{len(chunks)} start={chunk_start:.1f}s runtime={runtime}", flush=True)
-                        chunk_text = transcribe_chunk(chunk_path).strip()
+                        chunk_text = transcribe_with_bounded_retry(chunk_path, chunk_start, min(chunk_start + effective_chunk, duration), tmp, f"chunk_{chunk_index:04d}")
                         if chunk_text:
                             parts.append(chunk_text)
                         chunk_records.append({
                             "index": chunk_index,
                             "start": chunk_start,
-                            "end": chunk_start + effective_chunk,
+                            "end": min(chunk_start + effective_chunk, duration),
                             "path": str(chunk_path.name),
                             "speaker": None,
                             "chars": len(chunk_text),
@@ -1729,9 +1793,9 @@ try:
                 "model": model_id,
                 "language": language,
                 "timestamps": timestamps,
-                "manual_chunking": True,
+                "manual_chunking": chunk_duration is not None,
                 "chunk_duration": chunk_duration,
-                "overlap_duration": 0,
+                "overlap_duration": overlap_duration if chunk_duration is not None else 0,
                 "diarization": diarization_enabled,
                 "speaker_count": speaker_count,
                 "meeting_workspace": bool(diarization_enabled and diarize_segments is not None and speaker_summary and transcription_segments),
@@ -1774,12 +1838,6 @@ except Exception as e:
     raise SystemExit(1)
 """#
 
-        let proc = Process()
-        let pipe = Pipe()
-        proc.executableURL = URL(fileURLWithPath: pythonPath)
-        proc.arguments = ["-u", "-c", script, configURL.path]
-        proc.standardOutput = pipe
-        proc.standardError = pipe
         var env = ProcessInfo.processInfo.environment
         env["PYTHONUNBUFFERED"] = "1"
         env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
@@ -1789,7 +1847,12 @@ except Exception as e:
         } else {
             env["PATH"] = guiSafePath
         }
-        proc.environment = env
+
+        let request = ProcessRequest(
+            executablePath: pythonPath,
+            arguments: ["-u", "-c", script, configURL.path],
+            environment: env
+        )
 
         let batchHeader = """
 
@@ -1811,58 +1874,54 @@ Persistent log: \(persistentLogPath())
         logs += batchHeader
         appendPersistentLog(batchHeader)
 
-        pipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
-            DispatchQueue.main.async {
-                appendProcessOutput(chunk)
-            }
-        }
-
-        proc.terminationHandler = { finished in
-            DispatchQueue.main.async {
-                self.isRunning = false
-                self.process = nil
-                if let currentConfigPath {
-                    try? FileManager.default.removeItem(atPath: currentConfigPath)
-                    self.currentConfigPath = nil
-                }
-                if finished.terminationStatus == 0 {
-                    self.logs += "\n✅ Batch completed successfully.\n"
-                    self.appendPersistentLog("\n✅ Batch completed successfully.\n")
-                } else if finished.terminationStatus == 15 {
-                    self.logs += "\n⏹️ Batch stopped by user.\n"
-                    self.appendPersistentLog("\n⏹️ Batch stopped by user.\n")
-                } else {
-                    let reason = String(describing: finished.terminationReason)
-                    let message = "\n⚠️ Batch completed with errors (code \(finished.terminationStatus), reason \(reason)).\n"
-                    self.logs += message
-                    self.appendPersistentLog(message)
-                }
-                let exitLine = "---\nExit code: \(finished.terminationStatus)\n"
-                self.logs += exitLine
-                self.appendPersistentLog(exitLine)
-            }
-            pipe.fileHandleForReading.readabilityHandler = nil
-        }
-
         do {
             isRunning = true
-            try proc.run()
-            process = proc
-            logs += "Started PID: \(proc.processIdentifier)\n"
+            let task = try processRunner.start(
+                request,
+                onOutput: { event in
+                    DispatchQueue.main.async {
+                        appendProcessOutput(event.text)
+                    }
+                },
+                onTermination: { finished in
+                    DispatchQueue.main.async {
+                        self.isRunning = false
+                        self.processTask = nil
+                        if let currentConfigPath {
+                            try? FileManager.default.removeItem(atPath: currentConfigPath)
+                            self.currentConfigPath = nil
+                        }
+                        if finished.terminationStatus == 0 {
+                            self.logs += "\n✅ Batch completed successfully.\n"
+                            self.appendPersistentLog("\n✅ Batch completed successfully.\n")
+                        } else if finished.terminationStatus == 15 {
+                            self.logs += "\n⏹️ Batch stopped by user.\n"
+                            self.appendPersistentLog("\n⏹️ Batch stopped by user.\n")
+                        } else {
+                            let reason = String(describing: finished.terminationReason)
+                            let message = "\n⚠️ Batch completed with errors (code \(finished.terminationStatus), reason \(reason)).\n"
+                            self.logs += message
+                            self.appendPersistentLog(message)
+                        }
+                        let exitLine = "---\nExit code: \(finished.terminationStatus)\n"
+                        self.logs += exitLine
+                        self.appendPersistentLog(exitLine)
+                    }
+                }
+            )
+            processTask = task
+            logs += "Started PID: \(task.processIdentifier)\n"
         } catch {
             isRunning = false
-            process = nil
+            processTask = nil
             logs += "❌ Cannot start Python: \(error.localizedDescription)\n"
-            pipe.fileHandleForReading.readabilityHandler = nil
         }
     }
 
     private func stopBatch() {
-        guard let process else { return }
-        logs += "\nОстанавливаю PID: \(process.processIdentifier)...\n"
-        process.terminate()
+        guard let processTask else { return }
+        logs += "\nStopping PID: \(processTask.processIdentifier)...\n"
+        processTask.terminate()
     }
 
     private func appendProcessOutput(_ chunk: String) {
@@ -1886,9 +1945,10 @@ Persistent log: \(persistentLogPath())
         switch event {
         case .fileStarted(let path, _):
             updateStatus(path: path, status: "running")
-        case .fileCompleted(let path, let textPath, _, _):
+        case .fileCompleted(let path, let textPath, _, _, let chars):
             updateStatus(path: path, status: "done")
-            logs += "✅ Done: \(textPath ?? "")\n"
+            let charSuffix = chars.map { ", chars=\($0)" } ?? ""
+            logs += "✅ Done: \(textPath ?? "")\(charSuffix)\n"
         case .fileFailed(let path, let message):
             updateStatus(path: path, status: "failed")
             logs += "❌ Failed: \(path) — \(message)\n"
@@ -1904,8 +1964,11 @@ Persistent log: \(persistentLogPath())
             logs += "Stage: \(name)\(suffix)\n"
         case .chunkCompleted(let index, let start, let chars):
             logs += "Chunk \(index) at \(start)s completed (chars=\(chars))\n"
-        case .batchStarted, .unknown:
+        case .batchStarted:
             break
+        case .unknown(let kind, let payload):
+            let details = payload.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: ", ")
+            logs += "⚠️ Unknown CANARY_EVENT kind '\(kind)'\(details.isEmpty ? "" : " (\(details))")\n"
         }
     }
 

@@ -16,9 +16,9 @@ final class MeetingWorkspaceTests: XCTestCase {
 
         let markdown = workspace.render()
         XCTAssertTrue(markdown.contains("## Speakers"))
-        XCTAssertTrue(markdown.contains("Alice (SPEAKER_00)"))
-        XCTAssertTrue(markdown.contains("**Alice (SPEAKER_00)** [00:00:00 - 00:00:02]: Привет"))
-        XCTAssertTrue(markdown.contains("**SPEAKER_01** [00:00:02 - 00:00:05]: Здравствуйте"))
+        XCTAssertTrue(markdown.contains("Alice (SPEAKER\\_00)"))
+        XCTAssertTrue(markdown.contains("**Alice (SPEAKER\\_00)** [00:00:00 - 00:00:02]: Привет"))
+        XCTAssertTrue(markdown.contains("**SPEAKER\\_01** [00:00:02 - 00:00:05]: Здравствуйте"))
         XCTAssertTrue(markdown.contains("## Summary"))
         XCTAssertTrue(markdown.contains("## Decisions"))
         XCTAssertTrue(markdown.contains("## Action items"))
@@ -51,5 +51,20 @@ final class MeetingWorkspaceTests: XCTestCase {
         XCTAssertTrue(markdown.contains("# Transcript: audio.m4a"))
         XCTAssertTrue(markdown.contains("Plain transcript"))
         XCTAssertFalse(markdown.contains("## Speakers"))
+    }
+
+    func testMarkdownEscapesUntrustedSourceAliasSpeakerAndTranscript() {
+        let workspace = MeetingWorkspace(
+            sourceName: "bad|name`\n# heading.m4a",
+            segments: [SpeakerSegment(speaker: "SPEAKER|00", start: 0, end: 1, text: "hello | *world*\nnext")],
+            aliases: ["SPEAKER|00": "Alice|`_"],
+            fallbackText: "fallback"
+        )
+
+        let markdown = workspace.render()
+        XCTAssertTrue(markdown.contains("bad\\|name\\` # heading.m4a"))
+        XCTAssertTrue(markdown.contains("Alice\\|\\`\\_ (SPEAKER\\|00)"))
+        XCTAssertTrue(markdown.contains("hello \\| \\*world\\*  \nnext"))
+        XCTAssertFalse(markdown.contains("| SPEAKER|00 |"))
     }
 }

@@ -30,25 +30,25 @@ public struct MeetingWorkspace {
     public func render() -> String {
         let usableSegments = segments.filter { !$0.speaker.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         guard !usableSegments.isEmpty else {
-            return "# Transcript: \(sourceName)\n\n\(fallbackText)\n"
+            return "# Transcript: \(markdownHeading(sourceName))\n\n\(markdownText(fallbackText))\n"
         }
 
-        var lines = ["# Transcript: \(sourceName)", "", "## Speakers", "", "| Speaker | Segments | Duration | Alias |", "|---|---:|---:|---|"]
+        var lines = ["# Transcript: \(markdownHeading(sourceName))", "", "## Speakers", "", "| Speaker | Segments | Duration | Alias |", "|---|---:|---:|---|"]
         for speaker in speakerNames(in: usableSegments) {
             let speakerSegments = usableSegments.filter { $0.speaker == speaker }
             let duration = speakerSegments.reduce(0) { $0 + max(0, $1.end - $1.start) }
             let alias = aliases[speaker]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            lines.append("| \(speaker) | \(speakerSegments.count) | \(formatDuration(duration)) | \(alias)|")
+            lines.append("| \(markdownTableCell(speaker)) | \(speakerSegments.count) | \(formatDuration(duration)) | \(markdownTableCell(alias)) |")
         }
 
         lines += ["", "## Transcript", ""]
         let transcriptLines = usableSegments.compactMap { segment -> String? in
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return nil }
-            return "**\(displayName(for: segment.speaker))** [\(formatTime(segment.start)) - \(formatTime(segment.end))]: \(text)"
+            return "**\(markdownInline(displayName(for: segment.speaker)))** [\(formatTime(segment.start)) - \(formatTime(segment.end))]: \(markdownText(text))"
         }
         if transcriptLines.isEmpty {
-            lines.append(fallbackText)
+            lines.append(markdownText(fallbackText))
         } else {
             lines.append(contentsOf: transcriptLines)
         }
@@ -66,6 +66,32 @@ public struct MeetingWorkspace {
             return speaker
         }
         return "\(alias) (\(speaker))"
+    }
+
+    private func markdownHeading(_ value: String) -> String {
+        markdownInline(value).replacingOccurrences(of: "\n", with: " ")
+    }
+
+    private func markdownInline(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "`", with: "\\`")
+            .replacingOccurrences(of: "*", with: "\\*")
+            .replacingOccurrences(of: "_", with: "\\_")
+            .replacingOccurrences(of: "[", with: "\\[")
+            .replacingOccurrences(of: "]", with: "\\]")
+            .replacingOccurrences(of: "|", with: "\\|")
+    }
+
+    private func markdownText(_ value: String) -> String {
+        value.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { markdownInline(String($0)) }
+            .joined(separator: "  \n")
+    }
+
+    private func markdownTableCell(_ value: String) -> String {
+        markdownInline(value).replacingOccurrences(of: "\n", with: " ")
     }
 
     private func formatTime(_ seconds: Double) -> String {

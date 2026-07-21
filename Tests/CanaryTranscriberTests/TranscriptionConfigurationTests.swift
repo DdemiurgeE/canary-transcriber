@@ -4,6 +4,8 @@ import XCTest
 final class TranscriptionConfigurationTests: XCTestCase {
     private func makeConfig(
         files: [String] = ["/tmp/input.wav"],
+        profileID: String = "multilingual-canary-v2",
+        runtime: String = "mlx_audio_cli",
         chunkDuration: Double? = 30,
         overlapDuration: Double = 2,
         speakerCount: Int? = nil
@@ -12,8 +14,8 @@ final class TranscriptionConfigurationTests: XCTestCase {
             files: files,
             outputDir: "/tmp/output",
             writeNextToSource: false,
-            profileID: "multilingual-canary-v2",
-            runtime: "mlx_audio_cli",
+            profileID: profileID,
+            runtime: runtime,
             model: "CogniSoftOrg/canary-1b-v2-mlx-bf16",
             language: "ru",
             timestamps: false,
@@ -35,6 +37,12 @@ final class TranscriptionConfigurationTests: XCTestCase {
         }
     }
 
+    func testBlankInputPathFailsValidation() {
+        XCTAssertThrowsError(try makeConfig(files: ["  "]).validated()) { error in
+            XCTAssertEqual(error as? BatchConfig.ValidationError, .emptyInputPath)
+        }
+    }
+
     func testNonPositiveChunkDurationFailsValidation() {
         XCTAssertThrowsError(try makeConfig(chunkDuration: 0).validated()) { error in
             XCTAssertEqual(error as? BatchConfig.ValidationError, .invalidChunkDuration)
@@ -50,6 +58,41 @@ final class TranscriptionConfigurationTests: XCTestCase {
     func testSpeakerCountMustBePositive() {
         XCTAssertThrowsError(try makeConfig(speakerCount: 0).validated()) { error in
             XCTAssertEqual(error as? BatchConfig.ValidationError, .invalidSpeakerCount)
+        }
+    }
+
+    func testUnsupportedRuntimeFailsValidation() {
+        let config = makeConfig(runtime: "unknown-runtime")
+
+        XCTAssertThrowsError(try config.validated()) { error in
+            XCTAssertEqual(error as? BatchConfig.ValidationError, .unsupportedRuntime)
+        }
+    }
+
+    func testProfileRuntimeMismatchFailsValidation() {
+        let config = makeConfig(profileID: "fast-whisper-turbo")
+
+        XCTAssertThrowsError(try config.validated()) { error in
+            XCTAssertEqual(error as? BatchConfig.ValidationError, .unsupportedProfileRuntime)
+        }
+    }
+
+    func testNonFiniteChunkDurationFailsValidation() {
+        XCTAssertThrowsError(try makeConfig(chunkDuration: .infinity).validated()) { error in
+            XCTAssertEqual(error as? BatchConfig.ValidationError, .nonFiniteChunkDuration)
+        }
+    }
+
+    func testNonFiniteOverlapDurationFailsValidation() {
+        XCTAssertThrowsError(try makeConfig(overlapDuration: .nan).validated()) { error in
+            XCTAssertEqual(error as? BatchConfig.ValidationError, .nonFiniteOverlapDuration)
+        }
+    }
+
+    func testNilChunkDurationMeansOverlapMustBeZero() {
+        XCTAssertNoThrow(try makeConfig(chunkDuration: nil, overlapDuration: 0).validated())
+        XCTAssertThrowsError(try makeConfig(chunkDuration: nil, overlapDuration: 1).validated()) { error in
+            XCTAssertEqual(error as? BatchConfig.ValidationError, .invalidOverlapDuration)
         }
     }
 }

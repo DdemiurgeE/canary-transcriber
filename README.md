@@ -227,3 +227,7 @@ Persistent logs are written to:
 ```text
 ~/Documents/CanaryTranscripts/canary-transcriber.log
 ```
+
+### Swift core and embedded Python Markdown boundary
+
+`Sources/CanaryTranscriberCore/MeetingWorkspace.swift` is the tested Swift Markdown seam. The production transcription process still runs the historical `build_markdown()` implementation inside the embedded Python script in `Sources/CanaryTranscriberLib/CanaryTranscriber.swift`; the Swift renderer is not yet the runtime writer. This is an intentional transitional extraction: both implementations must preserve the same escaping and fallback semantics until the runtime is migrated to the Swift core, after which the Python formatter should be removed. The integration test extracts and executes the embedded script so protocol changes cannot silently break.

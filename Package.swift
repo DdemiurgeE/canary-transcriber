@@ -25,7 +25,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CanaryTranscriberTests",
-            dependencies: ["CanaryTranscriberCore"],
+            dependencies: ["CanaryTranscriberCore", "CanaryTranscriber"],
             path: "Tests/CanaryTranscriberTests"
         )
     ]
