@@ -27,4 +27,15 @@ final class SpeakerAliasPersistenceTests: XCTestCase {
     func testUsesOneStableStorageKey() {
         XCTAssertEqual(SpeakerAliasPersistence.storageKey, speakerAliasesStorageKey)
     }
+
+    func testInstanceOwnsLoadAndSaveStorage() {
+        let suiteName = "SpeakerAliasPersistenceTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let persistence = SpeakerAliasPersistence(defaults: defaults)
+        XCTAssertEqual(persistence.loadText(), "")
+        persistence.saveText("SPEAKER_00 = Alice")
+        XCTAssertEqual(persistence.loadText(), "SPEAKER_00 = Alice")
+    }
 }

@@ -1,9 +1,23 @@
 import Foundation
 
-/// Single owner for the local speaker-alias preference format.
-/// The UI may bind this value through @AppStorage using `storageKey`.
-public enum SpeakerAliasPersistence {
+/// Single owner for the local speaker-alias preference format and storage.
+/// The UI owns only the editable text; all UserDefaults access stays here.
+public final class SpeakerAliasPersistence {
     public static let storageKey = speakerAliasesStorageKey
+
+    private let defaults: UserDefaults
+
+    public init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    public func loadText() -> String {
+        defaults.string(forKey: Self.storageKey) ?? ""
+    }
+
+    public func saveText(_ text: String) {
+        defaults.set(text, forKey: Self.storageKey)
+    }
 
     public static func sanitize(_ aliases: [String: String]) -> [String: String] {
         aliases.reduce(into: [:]) { result, pair in

@@ -23,14 +23,22 @@ final class TranscriptionViewModel: ObservableObject {
     @Published var outputFolder: String = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents/CanaryTranscripts").path
     @Published var diarizationEnabled: Bool = false
     @Published var diarizationSpeakerCount: String = "2"
-    @Published var speakerAliasesText: String = UserDefaults.standard.string(forKey: speakerAliasesStorageKey) ?? "" {
-        didSet { UserDefaults.standard.set(speakerAliasesText, forKey: speakerAliasesStorageKey) }
+    private let speakerAliasPersistence: SpeakerAliasPersistence
+    @Published var speakerAliasesText: String {
+        didSet { speakerAliasPersistence.saveText(speakerAliasesText) }
+    }
+
+    init(aliasPersistence: SpeakerAliasPersistence = SpeakerAliasPersistence()) {
+        self.speakerAliasPersistence = aliasPersistence
+        self.speakerAliasesText = aliasPersistence.loadText()
     }
 
     @Published var isRunning = false
     @Published var processTask: (any ProcessRunningTask)?
     @Published var currentConfigPath: String?
+    @Published private(set) var lastBatchResult: BatchResult?
     let processRunner = ProcessRunner()
+    private let batchResultAccumulator = BatchResultAccumulator()
     @Published var isFileDropTargeted = false
 
     @Published var appAudioCapture = AppAudioCaptureController()
@@ -164,8 +172,8 @@ final class TranscriptionViewModel: ObservableObject {
         }
         let captureDir = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Documents/CanaryTranscripts/AppAudioCaptures", isDirectory: true)
-        let micLabel = captureMicrophone ? (selectedMicrophone?.title ?? "system default") : "off"
         captureMicrophone = withMic
+        let micLabel = captureMicrophone ? (selectedMicrophone?.title ?? "system default") : "off"
         logs += "Stage: start app audio capture for \(target.title); microphone=\(micLabel)\n"
         Task {
             await appAudioCapture.start(target: target, includeMicrophone: captureMicrophone, microphoneDeviceID: selectedMicrophoneID, outputDirectory: captureDir, onLog: { text in
@@ -394,6 +402,8 @@ final class TranscriptionViewModel: ObservableObject {
             return
         }
 
+        batchResultAccumulator.start(paths: config.files)
+        lastBatchResult = nil
         runPython(configURL: configURL, pythonPath: cleanPython, config: config)
     }
 
@@ -600,7 +610,7 @@ try:
                     joined = "\n".join(t.strip() for t in text_candidates if t.strip()).strip()
                     if joined:
                         return joined
-                    return "\n".join(line for line in output.splitlines() if line.strip() and not line.startswith("Stage:"))
+                    return "\n".join(line for line in output.splitlines() if line.strip() and not line.startswith("Stage:") and not line.startswith("Fetching ") and "it/s]" not in line)
             return transcribe
 
         raise RuntimeError(f"Unknown runtime: {runtime_name}. Supported: canary_mlx, mlx_whisper, mlx_audio_cli")
@@ -1013,6 +1023,10 @@ Persistent log: \(persistentLogPath())
                     DispatchQueue.main.async {
                         self.isRunning = false
                         self.processTask = nil
+                        self.lastBatchResult = self.batchResultAccumulator.finish(
+                            stopped: finished.terminationStatus == 15,
+                            fallbackMessage: finished.terminationStatus == 15 ? "Batch stopped by user." : "No completion event was received for this file."
+                        )
                         if let currentConfigPath = self.currentConfigPath {
                             try? FileManager.default.removeItem(atPath: currentConfigPath)
                             self.currentConfigPath = nil
@@ -1073,10 +1087,12 @@ Persistent log: \(persistentLogPath())
             updateStatus(path: path, status: "running")
         case .fileCompleted(let path, let textPath, _, _, let chars):
             updateStatus(path: path, status: "done")
+            batchResultAccumulator.recordSucceeded(path: path)
             let charSuffix = chars.map { ", chars=\($0)" } ?? ""
             logs += "✅ Done: \(textPath ?? "")\(charSuffix)\n"
         case .fileFailed(let path, let message):
             updateStatus(path: path, status: "failed")
+            batchResultAccumulator.recordFailed(path: path, message: message)
             logs += "❌ Failed: \(path) — \(message)\n"
         case .batchCompleted(_, let message):
             logs += "Batch summary: \(message ?? "completed")\n"
@@ -1367,16 +1383,16 @@ except Exception:
                     self.appendPersistentLog(output + "\n")
                     if task.terminationStatus == 0 {
                         self.ffmpegStatus = .present
-                        self.logs += "✅ ffmpeg установлен.\n"
+                        self.logs += "✅ ffmpeg installed.\n"
                     } else {
-                        self.logs += "❌ ffmpeg install failed (code \(task.terminationStatus)). Установи вручную: brew install ffmpeg\n"
+                        self.logs += "❌ ffmpeg install failed (code \(task.terminationStatus)). Install manually: brew install ffmpeg\n"
                     }
                     self.isInstallingFFmpeg = false
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.logs += "❌ Не удалось запустить brew: \(error.localizedDescription)\n"
-                    self.logs += "   Установи ffmpeg вручную: brew install ffmpeg\n"
+                    self.logs += "❌ Could not start brew: \(error.localizedDescription)\n"
+                    self.logs += "   Install ffmpeg manually: brew install ffmpeg\n"
                     self.isInstallingFFmpeg = false
                 }
             }
@@ -1406,7 +1422,7 @@ except Exception:
 
                 guard createTask.terminationStatus == 0 else {
                     DispatchQueue.main.async {
-                        self.logs += "❌ Не удалось создать venv. Создай вручную:\n   python3 -m venv \(venvDir)\n"
+                        self.logs += "❌ Could not create venv. Create it manually:\n   python3 -m venv \(venvDir)\n"
                         self.isSettingUpPython = false
                     }
                     return
@@ -1423,7 +1439,7 @@ except Exception:
                 installTask.standardOutput = installPipe
                 installTask.standardError = installPipe
 
-                DispatchQueue.main.async { self.logs += "Stage: installing packages... (может занять несколько минут)\n" }
+                DispatchQueue.main.async { self.logs += "Stage: installing packages... (may take several minutes)\n" }
                 try installTask.run()
                 installTask.waitUntilExit()
                 let pipOutput = String(data: installPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
@@ -1432,16 +1448,16 @@ except Exception:
                     if installTask.terminationStatus == 0 {
                         self.pythonPath = venvPython
                         self.pythonStatus = .present
-                        self.logs += "✅ Venv создан и пакеты установлены: \(venvPython)\n"
+                        self.logs += "✅ Venv created and packages installed: \(venvPython)\n"
                     } else {
                         self.logs += pipOutput + "\n"
-                        self.logs += "❌ pip install failed. Установи пакеты вручную:\n   \(venvPython) -m pip install mlx-audio mlx-whisper canary-mlx huggingface-hub\n"
+                        self.logs += "❌ pip install failed. Install packages manually:\n   \(venvPython) -m pip install mlx-audio mlx-whisper canary-mlx huggingface-hub\n"
                     }
                     self.isSettingUpPython = false
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.logs += "❌ Ошибка: \(error.localizedDescription). Создай venv вручную.\n"
+                    self.logs += "❌ Error: \(error.localizedDescription). Create the venv manually.\n"
                     self.isSettingUpPython = false
                 }
             }
@@ -1457,7 +1473,7 @@ except Exception:
 
         let py = pythonPath
         guard FileManager.default.isExecutableFile(atPath: py) else {
-            logs += "❌ Python venv не найден. Сначала настрой окружение.\n"
+            logs += "❌ Python venv not found. Set up the environment first.\n"
             modelDownloadStatus[modelID] = .missing
             isDownloadingModel = false
             return
@@ -1493,7 +1509,7 @@ except Exception as e:
                         self.appendPersistentLog(output)
                         if task.terminationStatus == 0 && output.contains("DONE") {
                             self.modelDownloadStatus[modelID] = .downloaded
-                            self.logs += "✅ Модель \(modelID) загружена.\n"
+                            self.logs += "✅ Model \(modelID) downloaded.\n"
                         } else {
                             self.modelDownloadStatus[modelID] = .missing
                         }
@@ -1507,7 +1523,7 @@ except Exception as e:
                 }
             } catch {
                 DispatchQueue.main.async {
-                    self.logs += "❌ Ошибка загрузки модели: \(error.localizedDescription)\n"
+                    self.logs += "❌ Model download error: \(error.localizedDescription)\n"
                     self.modelDownloadStatus[modelID] = .missing
                     self.isDownloadingModel = false
                 }
