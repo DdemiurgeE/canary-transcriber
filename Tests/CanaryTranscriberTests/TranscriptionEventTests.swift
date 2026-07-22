@@ -49,7 +49,7 @@ final class TranscriptionEventTests: XCTestCase {
     func testEmbeddedPythonEmitsRepresentativeCanaryEvents() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let sourceURL = testFile.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/CanaryTranscriberLib/CanaryTranscriber.swift")
+            .appendingPathComponent("Sources/CanaryTranscriberLib/TranscriptionViewModel.swift")
         let source = try String(contentsOf: sourceURL, encoding: .utf8)
         let startMarker = "let script = #\"\"\""
         let endMarker = "\"\"\"#"

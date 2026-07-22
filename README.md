@@ -57,7 +57,7 @@ The app defaults to this Python path:
 ~/venvs/canary-mlx/bin/python
 ```
 
-You can change it in the UI or launch the app with:
+The app accepts an override at launch:
 
 ```bash
 CANARY_MLX_PYTHON_BIN=/path/to/venv/bin/python open "Canary Transcriber.app"
@@ -94,8 +94,8 @@ If the DMG path is inconvenient, download `CanaryTranscriber.app.zip`, unzip it,
    - `multilingual European — Canary 1B v2` for Canary multilingual testing.
    - `realtime — Voxtral Mini Realtime` for the realtime-oriented Voxtral model in batch-file mode.
 5. Keep defaults unless needed:
-   - `Model`: auto-filled by the profile, but editable.
-   - `Runtime`: auto-filled by the profile, but editable.
+   - `Model`: read-only value supplied by the selected profile.
+   - `Runtime`: selected profile runtime.
    - `Lang`: `ru`
    - `Chunk sec`: `30`
 6. Click **Transcribe**.
@@ -104,10 +104,10 @@ If the DMG path is inconvenient, download `CanaryTranscriber.app.zip`, unzip it,
 ### Capture audio from a running app
 
 1. Start audio playback or join a call in the target app, for example Zoom, Teams, Safari, Chrome, Telegram, etc.
-2. In **Захват аудио приложения — ScreenCaptureKit**, click **Refresh apps** and select the target application.
-3. Leave **Добавлять мой микрофон и сводить app + mic в один файл** enabled if you want your own speech included.
+2. In **App Audio Capture — ScreenCaptureKit**, click **Refresh apps** and select target application.
+3. Use **Record app audio only** or **Record app audio + microphone** icon button.
 4. Choose a specific **Microphone** device, or leave **System default microphone**.
-5. Click **Record app + mic**.
+5. Click the **Record app audio + microphone** icon button.
 6. On first use, allow Canary Transcriber in macOS **System Settings → Privacy & Security → Screen & System Audio Recording** / **Screen Recording** and **Microphone** if prompted.
 7. Click **Stop recording** when finished.
 8. The app saves app-only `.m4a`, mic-only `.caf`, and mixed `.m4a` artifacts under `~/Documents/CanaryTranscripts/AppAudioCaptures/`; the mixed `conference-audio-*.m4a` is automatically added to the file list.
@@ -174,6 +174,11 @@ codesign --force --deep --sign - "dist/Canary Transcriber.app"
 This is enough for local use and DMG distribution, but it is **not notarized** by Apple. For broad distribution, sign with an Apple Developer ID certificate and notarize the app/DMG.
 
 ## Troubleshooting
+
+## Documentation
+
+- [Runtime profiles](docs/runtime-profiles.md)
+- [Testing and verification](docs/testing.md)
 
 ### `ffmpeg not found`
 
