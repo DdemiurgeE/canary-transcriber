@@ -2,6 +2,8 @@
 
 A small native macOS SwiftUI app for batch transcription with local MLX speech-to-text profiles.
 
+The latest published release is **[v0.5.2](../../releases/tag/v0.5.2)**. It includes the reliability pipeline, separated capture services, diarization progress reporting, transcript-progress filtering, and validated Russian Canary v2 and pyannote workflows.
+
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 
 
@@ -14,6 +16,10 @@ A small native macOS SwiftUI app for batch transcription with local MLX speech-t
 - Select one or multiple audio/video files.
 - Add files with a file picker or drag and drop them into the file list.
 - Capture audio from a specific running macOS application via ScreenCaptureKit, similar to OBS Studio's **macOS Audio Capture**; optionally record your microphone too, mix app+mic into one `.m4a`, then add it to the transcription queue.
+- Uses a typed transcription process runner with live stdout/stderr events, tracked cancellation of the Python process tree, recoverable per-file results, and mixed-success batch reporting.
+- Retries oversized MLX/Metal chunks with smaller chunk plans instead of failing the entire batch.
+- Validates transcription configuration before starting and keeps unknown runtime events visible in the log.
+- Separates SwiftUI panels, the observable `TranscriptionViewModel`, ScreenCaptureKit capture, microphone recording, and ffmpeg mixing into testable components.
 - Uses an external Python venv with profile-specific MLX packages.
 - Built-in model profiles:
   - `fast — Parakeet v3`: `mlx-community/parakeet-tdt-0.6b-v3` via `mlx-audio`.
@@ -30,6 +36,7 @@ A small native macOS SwiftUI app for batch transcription with local MLX speech-t
   - `<source>.canary.json`
   - `<source>.canary.md` (structured meeting workspace when diarization is enabled)
 - When diarization is enabled, Settings also accepts optional speaker aliases like `SPEAKER_00 = Alice` and stores them locally so they reappear on the next launch.
+- Optional pyannote diarization reports progress, validates segments, and falls back to speakerless transcription when short or unusable audio produces no segments.
 - Keeps a persistent troubleshooting log:
   - `~/Documents/CanaryTranscripts/canary-transcriber.log`
 
@@ -107,11 +114,10 @@ If the DMG path is inconvenient, download `CanaryTranscriber.app.zip`, unzip it,
 2. In **App Audio Capture — ScreenCaptureKit**, click **Refresh apps** and select target application.
 3. Use **Record app audio only** or **Record app audio + microphone** icon button.
 4. Choose a specific **Microphone** device, or leave **System default microphone**.
-5. Click the **Record app audio + microphone** icon button.
-6. On first use, allow Canary Transcriber in macOS **System Settings → Privacy & Security → Screen & System Audio Recording** / **Screen Recording** and **Microphone** if prompted.
-7. Click **Stop recording** when finished.
-8. The app saves app-only `.m4a`, mic-only `.caf`, and mixed `.m4a` artifacts under `~/Documents/CanaryTranscripts/AppAudioCaptures/`; the mixed `conference-audio-*.m4a` is automatically added to the file list.
-9. Click **Transcribe** to process the captured conference audio with the selected MLX profile.
+5. On first use, allow Canary Transcriber in macOS **System Settings → Privacy & Security → Screen & System Audio Recording** / **Screen Recording** and **Microphone** if prompted.
+6. Click **Stop recording** when finished.
+7. The app saves app-only `.m4a`, mic-only `.caf`, and mixed `.m4a` artifacts under `~/Documents/CanaryTranscripts/AppAudioCaptures/`; the mixed `conference-audio-*.m4a` is automatically added to the file list.
+8. Click **Transcribe** to process the captured conference audio with the selected MLX profile.
 
 This path captures the selected app before audio reaches the output device, so it works while listening through headphones. It does not require BlackHole/Loopback. App audio uses ScreenCaptureKit; microphone recording uses AVAudioEngine for the selected CoreAudio input device, then `ffmpeg` `amix` after Stop. The mix is microphone-priority: app audio is attenuated and microphone audio is noise-filtered, dynamically normalized, and boosted before limiting. This avoids ScreenCaptureKit `.microphone` dropping mic samples when the captured app is also producing audio. If the selected app is audible through speakers, the physical microphone may still pick it up; use headphones to avoid acoustic bleed.
 
@@ -122,6 +128,7 @@ For MLX/Metal memory errors, lower `Chunk sec` to `15` or `10`.
 ```bash
 git clone https://github.com/DdemiurgeE/canary-transcriber.git
 cd canary-transcriber
+swift test
 swift build --product canary-transcriber
 ```
 
@@ -152,15 +159,30 @@ dist/CanaryTranscriber.dmg.sha256
 dist/CanaryTranscriber.app.zip.sha256
 ```
 
+Validate the complete local release bundle, including the English bundle region, ad-hoc signature, installer assets, and SHA-256 checksums:
+
+```bash
+EXPECTED_VERSION=0.5.2 ./scripts/validate-release.sh
+```
+
+To validate generated transcription JSON as well, set `CANARY_OUTPUT_DIR` to a directory containing `.canary.json` files.
+
 ## Project structure
 
 ```text
 Package.swift
-Sources/CanaryTranscriber/main.swift
+Sources/CanaryTranscriberCore/       # typed pipeline contracts, chunking, diarization, Markdown
+Sources/CanaryTranscriberLib/        # SwiftUI, ViewModel, embedded runtime, capture services
+Sources/CanaryTranscriberApp/main.swift
+Tests/CanaryTranscriberTests/
 assets/canary-transcriber/CanaryTranscriber.icns
 assets/canary-transcriber/CanaryTranscriberIcon-1024.png
 scripts/build-canary-transcriber-app.sh
 scripts/build-installer-dmg.sh
+scripts/smoke-test-runtime.sh
+scripts/validate-release.sh
+docs/runtime-profiles.md
+docs/testing.md
 ```
 
 ## Notes on signing and notarization
@@ -173,12 +195,12 @@ codesign --force --deep --sign - "dist/Canary Transcriber.app"
 
 This is enough for local use and DMG distribution, but it is **not notarized** by Apple. For broad distribution, sign with an Apple Developer ID certificate and notarize the app/DMG.
 
-## Troubleshooting
-
 ## Documentation
 
 - [Runtime profiles](docs/runtime-profiles.md)
 - [Testing and verification](docs/testing.md)
+
+## Troubleshooting
 
 ### `ffmpeg not found`
 
@@ -235,4 +257,4 @@ Persistent logs are written to:
 
 ### Swift core and embedded Python Markdown boundary
 
-`Sources/CanaryTranscriberCore/MeetingWorkspace.swift` is the tested Swift Markdown seam. The production transcription process still runs the historical `build_markdown()` implementation inside the embedded Python script in `Sources/CanaryTranscriberLib/CanaryTranscriber.swift`; the Swift renderer is not yet the runtime writer. This is an intentional transitional extraction: both implementations must preserve the same escaping and fallback semantics until the runtime is migrated to the Swift core, after which the Python formatter should be removed. The integration test extracts and executes the embedded script so protocol changes cannot silently break.
+`Sources/CanaryTranscriberCore/MeetingWorkspace.swift` is the tested Swift Markdown seam. The production transcription process still runs the embedded Python runtime assembled by `TranscriptionViewModel`; the Swift renderer is not yet the runtime writer. This is an intentional transitional extraction: both implementations must preserve the same escaping and fallback semantics until the runtime is migrated to the Swift core. The integration tests extract and compile the embedded script so protocol changes cannot silently break.
