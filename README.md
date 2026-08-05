@@ -2,7 +2,7 @@
 
 A small native macOS SwiftUI app for batch transcription with local MLX speech-to-text profiles.
 
-The latest published release is **[v0.5.2](../../releases/tag/v0.5.2)**. It includes the reliability pipeline, separated capture services, diarization progress reporting, transcript-progress filtering, and validated Russian Canary v2 and pyannote workflows.
+The latest published release is **[v0.6.0](../../releases/tag/v0.6.0)**. It adds Sparkle-based auto-update on top of the reliability pipeline, separated capture services, diarization progress reporting, and validated Russian Canary v2 and pyannote workflows.
 
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 
