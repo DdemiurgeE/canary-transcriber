@@ -7,17 +7,24 @@ cd "$ROOT"
 swift build --product canary-transcriber
 
 APP="$ROOT/dist/Canary Transcriber.app"
-BIN="$ROOT/.build/arm64-apple-macosx/debug/canary-transcriber"
+BUILD_DIR="$ROOT/.build/arm64-apple-macosx/debug"
+BIN="$BUILD_DIR/canary-transcriber"
 if [[ ! -x "$BIN" ]]; then
-  BIN="$ROOT/.build/debug/canary-transcriber"
+  BUILD_DIR="$ROOT/.build/debug"
+  BIN="$BUILD_DIR/canary-transcriber"
 fi
 if [[ ! -x "$BIN" ]]; then
   echo "Cannot find built canary-transcriber binary" >&2
   exit 1
 fi
+SPARKLE_FRAMEWORK="$BUILD_DIR/Sparkle.framework"
+if [[ ! -d "$SPARKLE_FRAMEWORK" ]]; then
+  echo "Cannot find Sparkle.framework next to the built binary at $SPARKLE_FRAMEWORK" >&2
+  exit 1
+fi
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -54,6 +61,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <string>Canary Transcriber записывает ваш микрофон вместе со звуком выбранного приложения для транскрипции встреч.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Local app</string>
+    <key>SUFeedURL</key>
+    <string>https://ddemiurgee.github.io/canary-transcriber/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>l2mgkExreHN0q006vLNTXqQeUrgEcouFLB35fTnASoA=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
 </dict>
 </plist>
 PLIST
@@ -62,6 +75,9 @@ printf 'APPL????' > "$APP/Contents/PkgInfo"
 cp "$BIN" "$APP/Contents/MacOS/canary-transcriber"
 cp "$ROOT/assets/canary-transcriber/CanaryTranscriber.icns" "$APP/Contents/Resources/CanaryTranscriber.icns"
 chmod +x "$APP/Contents/MacOS/canary-transcriber"
+rm -rf "$APP/Contents/Frameworks/Sparkle.framework"
+ditto --norsrc --noextattr "$SPARKLE_FRAMEWORK" "$APP/Contents/Frameworks/Sparkle.framework"
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/MacOS/canary-transcriber"
 
 cleanup_xattrs() {
   local target="$1"

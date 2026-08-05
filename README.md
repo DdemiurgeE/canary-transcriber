@@ -39,6 +39,7 @@ The latest published release is **[v0.5.2](../../releases/tag/v0.5.2)**. It incl
 - Optional pyannote diarization reports progress, validates segments, and falls back to speakerless transcription when short or unusable audio produces no segments.
 - Keeps a persistent troubleshooting log:
   - `~/Documents/CanaryTranscripts/canary-transcriber.log`
+- Checks for app updates via [Sparkle](https://sparkle-project.org), with a **Check for Updates…** menu item and EdDSA-signed releases published to GitHub. See [Release quality](docs/testing.md#auto-update-sparkle-release-step) for the release-side signing step.
 
 ## Requirements
 
@@ -179,10 +180,13 @@ assets/canary-transcriber/CanaryTranscriber.icns
 assets/canary-transcriber/CanaryTranscriberIcon-1024.png
 scripts/build-canary-transcriber-app.sh
 scripts/build-installer-dmg.sh
+scripts/generate-appcast.sh
 scripts/smoke-test-runtime.sh
 scripts/validate-release.sh
 docs/runtime-profiles.md
 docs/testing.md
+docs/appcast.xml              # served via GitHub Pages as the Sparkle update feed
+.swiftlint.yml
 ```
 
 ## Notes on signing and notarization

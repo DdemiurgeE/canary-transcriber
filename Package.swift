@@ -8,6 +8,9 @@ let package = Package(
         .library(name: "CanaryTranscriber", targets: ["CanaryTranscriber"]),
         .executable(name: "canary-transcriber", targets: ["CanaryTranscriberApp"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.4")
+    ],
     targets: [
         .target(
             name: "CanaryTranscriberCore",
@@ -20,7 +23,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "CanaryTranscriberApp",
-            dependencies: ["CanaryTranscriber"],
+            dependencies: [
+                "CanaryTranscriber",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             path: "Sources/CanaryTranscriberApp"
         ),
         .testTarget(

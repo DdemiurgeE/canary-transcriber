@@ -1,9 +1,16 @@
 import SwiftUI
 import AppKit
 import CanaryTranscriber
+import Sparkle
 
 @main
 struct CanaryTranscriberApp: App {
+    private let updaterController = SPUStandardUpdaterController(
+        startingUpdater: true,
+        updaterDelegate: nil,
+        userDriverDelegate: nil
+    )
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -11,6 +18,9 @@ struct CanaryTranscriberApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    updaterController.checkForUpdates(nil)
+                }
                 Button("About Canary Transcriber") {
                     let credits = NSAttributedString(
                         string: """
