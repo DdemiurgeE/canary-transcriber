@@ -1,9 +1,17 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>Canary Transcriber Changelog</title>
         <link>https://ddemiurgee.github.io/canary-transcriber/appcast.xml</link>
         <description>Most recent changes for Canary Transcriber.</description>
         <language>en</language>
+        <item>
+            <title>Version 0.6.0</title>
+            <pubDate>Wed, 05 Aug 2026 09:09:45 +0000</pubDate>
+            <sparkle:version>8</sparkle:version>
+            <sparkle:shortVersionString>0.6.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/DdemiurgeE/canary-transcriber/releases/download/v0.6.0/CanaryTranscriber.app.zip" type="application/octet-stream" sparkle:edSignature="vBnJJW86WQHzdSOb95754N3RIl92wFpa8AvbB7IX24sjPYy52Bnbc3VaOwFhIwpyCuTOW5sMSqL9SYfOVOJ4BQ==" length="2346946" />
+        </item>
     </channel>
 </rss>
