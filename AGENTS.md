@@ -1,44 +1,42 @@
 # Project Agent Context
 
 This file is automatically injected into every Hermes conversation in this project.
-Update the sections below to match your project.
 
 ---
 
 ## Project Overview
 
-> **TODO**: Replace with your project description.
-> Example: "REST API for a task management SaaS. Python 3.12, FastAPI, PostgreSQL 16, Redis."
+Canary Transcriber is a native macOS SwiftUI app for batch audio/video transcription using local MLX speech-to-text models (Parakeet, Whisper, Canary v2, Voxtral), with optional pyannote speaker diarization and ScreenCaptureKit app-audio capture.
 
-**Stack**: <language> <framework> <database> <other key deps>
-**Repo root**: <absolute path>
-**Test command**: <e.g., `pytest -x -q` or `npm test`>
-**Lint command**: <e.g., `ruff check .` or `eslint src/`>
-**Run locally**: <e.g., `uvicorn app.main:app --reload`>
+**Stack**: Swift 5.10, SwiftUI/AppKit, Swift Package Manager, XCTest, AVFoundation, ScreenCaptureKit, `ffmpeg`, embedded Python (`mlx-audio`/`mlx-whisper`/`canary-mlx`, `pyannote.audio`, HuggingFace Hub).
+**Repo root**: `/Users/pavelpalnikov/Documents/Projects/personal/canary-transcriber`
+**Test command**: `swift test`
+**Lint command**: `swiftlint lint` (config: `.swiftlint.yml`)
+**Run locally**: `swift run canary-transcriber`
 
 ---
 
 ## Service Vision
 
-> **TODO**: Describe the long-term architectural direction.
-> The Service Vision controller reads this to evaluate alignment.
-
-- **Core principle**: <e.g., "API-first, async by default, zero downtime deploys">
-- **Approved tech additions**: <e.g., "Celery for async tasks, S3 for file storage">
-- **Explicitly avoided**: <e.g., "No Django ORM, no monkeypatching, no global state">
-- **Roadmap themes**: <e.g., "Q3: multi-tenancy, Q4: real-time notifications">
+- **Core principle**: SwiftUI shell stays thin; transcription orchestration, configuration validation, process execution, output writing, and capture services live in testable Swift types under `CanaryTranscriberCore`/`CanaryTranscriberLib`, not in embedded Python or monolithic view files.
+- **Approved tech additions**: `ffmpeg` subprocess, local Python venv for MLX/pyannote runtimes, ScreenCaptureKit/AVAudioEngine for capture.
+- **Explicitly avoided**: bundling a Python runtime inside the app; cloud/remote transcription (local-only by design); persistent cross-file speaker identity claims.
+- **Roadmap themes**: finish migrating the embedded Python Markdown/event-writing logic to the Swift core (`MeetingWorkspace.swift` already covers rendering); real notarized signing for distribution; auto-update.
 
 ---
 
 ## Directory Layout
 
 ```
-<project_root>/
-  src/           # application source
-  tests/         # test suite
-  migrations/    # database migrations
-  docs/          # technical documentation
-  pipeline/      # AI pipeline artifacts (auto-generated, gitignored)
+canary-transcriber/
+  Sources/CanaryTranscriberCore/   # pure Swift: config validation, chunk planning, diarization contracts, event parsing, Markdown/output rendering
+  Sources/CanaryTranscriberLib/    # SwiftUI views, TranscriptionViewModel, capture services (ScreenCaptureKit/AVAudioEngine), ffmpeg mixing, embedded Python runtime
+  Sources/CanaryTranscriberApp/    # executable entry point
+  Tests/CanaryTranscriberTests/    # XCTest suite, mostly Core coverage
+  scripts/                         # build-app, build-dmg, smoke-test-runtime, validate-release
+  docs/                            # runtime-profiles.md, testing.md
+  planning/                        # design docs (e.g. speaker-diarization-plan.md)
+  pipeline/                        # Hermes pipeline stage artifacts (committed, not gitignored)
 ```
 
 ---
@@ -60,24 +58,20 @@ All pipeline artifacts live under `pipeline/<stage_id>/`:
 | `STAGE_<id>_ISSUES.md` | Orchestrator | Open issues log |
 | `last_verified_commit` | Orchestrator | Last clean git SHA |
 
-Add `pipeline/` to `.gitignore` or commit it — your choice.
+`pipeline/` is currently committed to the repo (not gitignored) — keep it that way unless a decision is made to stop tracking stage history.
 
 ---
 
 ## Coding Conventions
 
-> **TODO**: Add project-specific conventions.
-
-- <e.g., "All public functions must have docstrings">
-- <e.g., "Use `logger = logging.getLogger(__name__)` in every module">
-- <e.g., "Migrations must be reversible — always provide `downgrade()`">
+- Keep `CanaryTranscriberCore` free of SwiftUI/AppKit/Foundation-process imports — it must stay unit-testable without launching subprocesses.
+- New process-launching code should go through the `ProcessRunning` protocol (`Sources/CanaryTranscriberCore/ProcessRunning.swift`) rather than calling `Process` directly, so it stays testable via dependency injection.
+- All user-visible UI strings are English only; Russian is the default transcription *language*, not the UI language.
+- Preserve `.canary.txt`/`.canary.json`/`.canary.md` output schemas — downstream tooling and tests depend on them.
+- The embedded Python runtime in `TranscriptionViewModel.swift` and the Swift `MeetingWorkspace` renderer must stay behaviorally identical (same escaping/fallback rules) until the Python path is fully retired.
 
 ---
 
 ## Contacts / Escalation
 
-> **TODO**: Who to ping for decisions.
-
-- Architecture decisions: <name/handle>
-- Security questions: <name/handle>
-- DB schema changes: <name/handle>
+Single-maintainer personal project — Pavel Palnikov (palnikov@anabion.com) makes all architecture, security, and release decisions.

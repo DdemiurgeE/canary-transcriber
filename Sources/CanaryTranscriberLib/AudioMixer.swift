@@ -4,21 +4,25 @@ import CanaryTranscriberCore
 final class AudioMixer {
     private init() {}
 
+    static func mixArguments(appPath: String, micPath: String, outputPath: String) -> [String] {
+        [
+            "-hide_banner", "-loglevel", "error", "-y",
+            "-i", appPath,
+            "-i", micPath,
+            "-filter_complex", "[0:a]volume=0.22[a0];[1:a]highpass=f=90,lowpass=f=9000,afftdn=nf=-28,dynaudnorm=f=150:g=31:p=0.95:m=15,volume=3.0[a1];[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95,aresample=48000[a]",
+            "-map", "[a]",
+            "-c:a", "aac", "-b:a", "192k",
+            outputPath
+        ]
+    }
+
     static func mixAppAndMicrophone(appURL: URL, micURL: URL, outputURL: URL, onLog: ((String) -> Void)? = nil) throws -> URL {
         let ffmpeg = try resolveFFmpeg()
         onLog?("Stage: mix app audio + microphone with ffmpeg (mic-priority: app -13 dB, mic normalized/boosted) → \(outputURL.path)\n")
         let proc = Process()
         let pipe = Pipe()
         proc.executableURL = URL(fileURLWithPath: ffmpeg)
-        proc.arguments = [
-            "-hide_banner", "-loglevel", "error", "-y",
-            "-i", appURL.path,
-            "-i", micURL.path,
-            "-filter_complex", "[0:a]volume=0.22[a0];[1:a]highpass=f=90,lowpass=f=9000,afftdn=nf=-28,dynaudnorm=f=150:g=31:p=0.95:m=15,volume=3.0[a1];[a0][a1]amix=inputs=2:duration=longest:dropout_transition=0:normalize=0,alimiter=limit=0.95,aresample=48000[a]",
-            "-map", "[a]",
-            "-c:a", "aac", "-b:a", "192k",
-            outputURL.path
-        ]
+        proc.arguments = mixArguments(appPath: appURL.path, micPath: micURL.path, outputPath: outputURL.path)
         proc.standardOutput = pipe
         proc.standardError = pipe
         try proc.run()
