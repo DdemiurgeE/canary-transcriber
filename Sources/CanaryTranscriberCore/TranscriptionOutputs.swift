@@ -5,13 +5,14 @@ public struct TranscriptionOutputPaths: Equatable {
     public let json: URL
     public let markdown: URL
 
-    public init(sourceURL: URL, outputDirectory: URL?, writeNextToSource: Bool) {
+    public init(sourceURL: URL, outputDirectory: URL?, writeNextToSource: Bool, markdownDirectory: URL? = nil) {
         let directory = writeNextToSource ? sourceURL.deletingLastPathComponent() : (outputDirectory ?? sourceURL.deletingLastPathComponent())
         let stem = sourceURL.deletingPathExtension().lastPathComponent
         let base = directory.appendingPathComponent("\(stem).canary")
         self.text = base.appendingPathExtension("txt")
         self.json = base.appendingPathExtension("json")
-        self.markdown = base.appendingPathExtension("md")
+        let markdownBase = (markdownDirectory ?? directory).appendingPathComponent("\(stem).canary")
+        self.markdown = markdownBase.appendingPathExtension("md")
     }
 }
 

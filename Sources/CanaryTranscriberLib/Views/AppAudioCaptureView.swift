@@ -27,21 +27,21 @@ struct AppAudioCaptureView: View {
                             Image(systemName: "app.badge")
                                 .font(.title)
                         }
-                        .fastTooltip("Record app audio only (no microphone)")
+                        .help("Record app audio only (no microphone)")
                         .disabled(viewModel.appAudioCapture.isRecording || viewModel.isRunning || viewModel.selectedCaptureApp == nil)
 
                         Button(action: { viewModel.startAppAudioCapture(withMic: true) }) {
                             Image(systemName: "waveform.badge.mic")
                                 .font(.title)
                         }
-                        .fastTooltip("Record app audio + microphone")
+                        .help("Record app audio + microphone")
                         .disabled(viewModel.appAudioCapture.isRecording || viewModel.isRunning || viewModel.selectedCaptureApp == nil)
 
                         Button(action: { viewModel.stopAppAudioCapture() }) {
                             Image(systemName: "stop.fill")
                                 .font(.title)
                         }
-                        .fastTooltip("Stop recording")
+                        .help("Stop recording")
                         .disabled(!viewModel.appAudioCapture.isRecording)
                     }
                     .buttonStyle(.borderedProminent)
@@ -62,6 +62,14 @@ struct AppAudioCaptureView: View {
                         .disabled(viewModel.appAudioCapture.isRecording || viewModel.isRunning)
                 }
 
+                if viewModel.appAudioCapture.isFinishing {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Finishing up — mixing app audio + microphone, this can take a moment for long recordings…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             .padding(.vertical, 4)
         }

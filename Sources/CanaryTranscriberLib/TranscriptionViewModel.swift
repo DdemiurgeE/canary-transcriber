@@ -7,7 +7,7 @@ import AudioToolbox
 import ScreenCaptureKit
 import CanaryTranscriberCore
 
-final class TranscriptionViewModel: ObservableObject {
+public final class TranscriptionViewModel: ObservableObject {
     @Published var files: [AudioFileItem] = []
     @Published var selectedFileID: AudioFileItem.ID?
     @Published var logs: String = "Ready. Add audio files and click Transcribe.\n"
@@ -21,6 +21,8 @@ final class TranscriptionViewModel: ObservableObject {
     @Published var timestamps: Bool = false
     @Published var writeNextToSource: Bool = true
     @Published var outputFolder: String = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents/CanaryTranscripts").path
+    @Published var separateMarkdownOutput: Bool = false
+    @Published var markdownOutputFolder: String = ""
     @Published var diarizationEnabled: Bool = false
     @Published var diarizationSpeakerCount: String = "2"
     private let speakerAliasPersistence: SpeakerAliasPersistence
@@ -28,12 +30,25 @@ final class TranscriptionViewModel: ObservableObject {
         didSet { speakerAliasPersistence.saveText(speakerAliasesText) }
     }
 
-    init(aliasPersistence: SpeakerAliasPersistence = SpeakerAliasPersistence()) {
+    let libraryStore: SessionLibraryStore
+    @Published var librarySessions: [SessionRecord] = []
+    var activeSessionIDsByPath: [String: SessionRecord.ID] = [:]
+    var logStartIndexByPath: [String: String.Index] = [:]
+    /// Pre-requeue snapshot of a reused Library row, so cancelling a staged re-run via
+    /// `removeQueuedSession` restores the prior state instead of deleting history.
+    var revertSnapshots: [String: SessionRecord] = [:]
+
+    public init(aliasPersistence: SpeakerAliasPersistence = SpeakerAliasPersistence(), libraryStore: SessionLibraryStore = SessionLibraryStore()) {
         self.speakerAliasPersistence = aliasPersistence
         self.speakerAliasesText = aliasPersistence.loadText()
+        self.libraryStore = libraryStore
+        self.librarySessions = libraryStore.load()
+        reconcileStaleSessions()
     }
 
     @Published var isRunning = false
+    @Published var currentProcessingPath: String?
+    @Published var lastProgressLine: String = ""
     @Published var processTask: (any ProcessRunningTask)?
     @Published var currentConfigPath: String?
     @Published private(set) var lastBatchResult: BatchResult?
@@ -298,6 +313,7 @@ final class TranscriptionViewModel: ObservableObject {
 
         if !additions.isEmpty {
             files.append(contentsOf: additions)
+            for item in additions { queueSession(for: item.path) }
         }
         logs += "Added files (\(source)): \(additions.count)"
         if skippedDuplicates > 0 { logs += ", duplicates skipped: \(skippedDuplicates)" }
@@ -324,6 +340,17 @@ final class TranscriptionViewModel: ObservableObject {
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
             outputFolder = normalizeUserPath(url.standardizedFileURL.path)
+        }
+    }
+
+    func chooseMarkdownOutputFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK, let url = panel.url {
+            markdownOutputFolder = normalizeUserPath(url.standardizedFileURL.path)
         }
     }
 
@@ -366,12 +393,26 @@ final class TranscriptionViewModel: ObservableObject {
             }
         }
 
+        var cleanMarkdownOutput: String?
+        if separateMarkdownOutput {
+            let markdownDir = normalizeUserPath(markdownOutputFolder)
+            markdownOutputFolder = markdownDir
+            do {
+                try FileManager.default.createDirectory(atPath: markdownDir, withIntermediateDirectories: true)
+            } catch {
+                logs += "❌ Cannot create markdown output folder: \(error.localizedDescription)\n"
+                return
+            }
+            cleanMarkdownOutput = markdownDir
+        }
+
         let chunk = Double(chunkDuration.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 30.0
         let speakerCountText = diarizationSpeakerCount.trimmingCharacters(in: .whitespacesAndNewlines)
         let forcedSpeakerCount = Int(speakerCountText).flatMap { $0 > 0 ? $0 : nil }
         let config = BatchConfig(
             files: normalizedFiles.map { $0.path },
             outputDir: writeNextToSource ? nil : cleanOutput,
+            markdownOutputDir: cleanMarkdownOutput,
             writeNextToSource: writeNextToSource,
             profileID: selectedProfileID,
             runtime: runtime,
@@ -390,6 +431,8 @@ final class TranscriptionViewModel: ObservableObject {
             logs += "❌ Invalid transcription configuration: \(error.localizedDescription)\n"
             return
         }
+
+        refreshQueuedSessions(for: config)
 
         let configURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("canary-transcriber-\(UUID().uuidString).json")
@@ -419,10 +462,14 @@ import wave
 from datetime import datetime
 from pathlib import Path
 
+FFMPEG_TIMEOUT_SECONDS = 600
+FFMPEG_CHUNK_TIMEOUT_SECONDS = 180
+
 try:
     cfg = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
     files = [Path(p).expanduser() for p in cfg["files"]]
     output_dir = Path(cfg["outputDir"]).expanduser() if cfg.get("outputDir") else None
+    markdown_output_dir = Path(cfg["markdownOutputDir"]).expanduser() if cfg.get("markdownOutputDir") else None
     write_next_to_source = bool(cfg.get("writeNextToSource", True))
     model_id = cfg.get("model") or "qfuxa/canary-mlx"
     runtime = cfg.get("runtime") or "canary_mlx"
@@ -459,7 +506,9 @@ try:
         base_dir = audio_path.parent if write_next_to_source else output_dir
         base_dir.mkdir(parents=True, exist_ok=True)
         stem = audio_path.stem
-        return base_dir / f"{stem}.canary.txt", base_dir / f"{stem}.canary.json", base_dir / f"{stem}.canary.md"
+        md_dir = markdown_output_dir if markdown_output_dir is not None else base_dir
+        md_dir.mkdir(parents=True, exist_ok=True)
+        return base_dir / f"{stem}.canary.txt", base_dir / f"{stem}.canary.json", md_dir / f"{stem}.canary.md"
 
     def resolve_ffmpeg():
         candidates = [
@@ -483,11 +532,11 @@ try:
         normalized = work_dir / "normalized.wav"
         print(f"Stage: ffmpeg normalize -> {normalized}", flush=True)
         subprocess.run([
-            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
             "-i", str(audio_path),
             "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
             str(normalized),
-        ], check=True)
+        ], check=True, timeout=FFMPEG_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL)
 
         duration = wav_duration_seconds(normalized)
         # nil chunkDuration explicitly disables fixed chunking: transcribe the
@@ -505,12 +554,12 @@ try:
         while start < duration:
             out = work_dir / f"chunk_{idx:04d}.wav"
             subprocess.run([
-                ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
                 "-ss", f"{start:.3f}", "-i", str(normalized),
                 "-t", f"{chunk_seconds:.3f}",
                 "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
                 str(out),
-            ], check=True)
+            ], check=True, timeout=FFMPEG_CHUNK_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL)
             if out.exists() and out.stat().st_size > 44:
                 chunks.append((idx, start, out))
             idx += 1
@@ -673,12 +722,12 @@ try:
         ffmpeg = resolve_ffmpeg()
         duration = max(0.0, float(end) - float(start))
         subprocess.run([
-            ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
             "-ss", f"{float(start):.3f}", "-i", str(source_wav),
             "-t", f"{duration:.3f}",
             "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
             str(output_wav),
-        ], check=True)
+        ], check=True, timeout=FFMPEG_CHUNK_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL)
         return output_wav
 
     def merge_speaker_segments(segments, max_seconds, min_seconds=0.6, max_gap=0.8):
@@ -839,11 +888,11 @@ try:
             for retry_index, (retry_start, retry_end) in enumerate(((start, midpoint), (midpoint, end))):
                 retry_path = Path(work_dir) / f"{label}_retry_{retry_index:02d}.wav"
                 subprocess.run([
-                    ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+                    ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
                     "-ss", str(retry_start), "-t", str(max(0.01, retry_end - retry_start)),
                     "-i", str(Path(work_dir) / "normalized.wav"),
                     "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(retry_path)
-                ], check=True)
+                ], check=True, timeout=FFMPEG_CHUNK_TIMEOUT_SECONDS, stdin=subprocess.DEVNULL)
                 retry_text.append(transcribe_chunk(retry_path).strip())
             return "\n".join(text for text in retry_text if text).strip()
 
@@ -1003,6 +1052,7 @@ Diarization: \(config.diarization ? "yes (pyannote/speaker-diarization-3.1)" : "
 Speakers: \(config.speakerCount.map { String($0) } ?? "auto")
 Files: \(config.files.count)
 Output: \(config.writeNextToSource ? "next to source files" : (config.outputDir ?? ""))
+Markdown output: \(config.markdownOutputDir ?? "same as output")
 PATH: \(env["PATH"] ?? "")
 Persistent log: \(persistentLogPath())
 
@@ -1072,6 +1122,7 @@ Persistent log: \(persistentLogPath())
             } else if !text.isEmpty {
                 logs += text + "\n"
                 appendPersistentLog(text + "\n")
+                lastProgressLine = text
             }
         }
     }
@@ -1085,15 +1136,30 @@ Persistent log: \(persistentLogPath())
         switch event {
         case .fileStarted(let path, _):
             updateStatus(path: path, status: "running")
-        case .fileCompleted(let path, let textPath, _, _, let chars):
+            currentProcessingPath = path
+            logStartIndexByPath[path] = logs.endIndex
+            updateSession(path: path) { $0.status = .processing }
+        case .fileCompleted(let path, let textPath, let jsonPath, let markdownPath, let chars):
             updateStatus(path: path, status: "done")
             batchResultAccumulator.recordSucceeded(path: path)
             let charSuffix = chars.map { ", chars=\($0)" } ?? ""
             logs += "✅ Done: \(textPath ?? "")\(charSuffix)\n"
+            if currentProcessingPath == path { currentProcessingPath = nil }
+            updateSession(path: path) {
+                $0.status = .done
+                $0.textPath = textPath
+                $0.jsonPath = jsonPath
+                $0.markdownPath = markdownPath
+            }
         case .fileFailed(let path, let message):
             updateStatus(path: path, status: "failed")
             batchResultAccumulator.recordFailed(path: path, message: message)
             logs += "❌ Failed: \(path) — \(message)\n"
+            if currentProcessingPath == path { currentProcessingPath = nil }
+            updateSession(path: path) {
+                $0.status = .failed
+                $0.errorMessage = message
+            }
         case .batchCompleted(_, let message):
             logs += "Batch summary: \(message ?? "completed")\n"
         case .warning(let message):
@@ -1103,9 +1169,13 @@ Persistent log: \(persistentLogPath())
             logs += "❌ \(message)\(suffix)\n"
         case .stage(let name, let file):
             let suffix = file.map { " — \($0)" } ?? ""
-            logs += "Stage: \(name)\(suffix)\n"
+            let line = "Stage: \(name)\(suffix)"
+            logs += "\(line)\n"
+            lastProgressLine = line
         case .chunkCompleted(let index, let start, let chars):
-            logs += "Chunk \(index) at \(start)s completed (chars=\(chars))\n"
+            let line = "Chunk \(index) at \(start)s completed (chars=\(chars))"
+            logs += "\(line)\n"
+            lastProgressLine = line
         case .batchStarted:
             break
         case .unknown(let kind, let payload):
@@ -1119,6 +1189,7 @@ Persistent log: \(persistentLogPath())
             files[idx].status = status
         }
     }
+
 
     func openOutputLocation() {
         if writeNextToSource {
@@ -1227,41 +1298,6 @@ Persistent log: \(persistentLogPath())
     }
 
     // MARK: - Dependency checks
-
-    func statusDot(_ status: DependencyStatus) -> some View {
-        Circle()
-            .fill(statusDotColor(status))
-            .frame(width: 10, height: 10)
-    }
-
-    func statusDotColor(_ status: DependencyStatus) -> Color {
-        switch status {
-        case .present, .downloaded: return .green
-        case .checking, .downloading, .updatable: return .orange
-        case .missing: return .red
-        case .unknown: return .gray
-        }
-    }
-
-    func ffmpegStatusLabel(_ status: DependencyStatus) -> String {
-        switch status {
-        case .unknown, .checking: return "Checking..."
-        case .present: return "Installed"
-        case .missing: return "Not found"
-        case .downloaded, .downloading: return ""
-        case .updatable: return ""
-        }
-    }
-
-    func pythonStatusLabel(_ status: DependencyStatus) -> String {
-        switch status {
-        case .unknown, .checking: return "Checking..."
-        case .present: return "Ready"
-        case .missing: return "Not found — setup venv"
-        case .downloaded, .downloading: return ""
-        case .updatable: return ""
-        }
-    }
 
     func checkDependencies() {
         ffmpegStatus = .checking

@@ -5,6 +5,7 @@ public let speakerAliasesStorageKey = "canary.speakerAliasesText"
 public struct BatchConfig: Codable {
     public let files: [String]
     public let outputDir: String?
+    public let markdownOutputDir: String?
     public let writeNextToSource: Bool
     public let profileID: String
     public let runtime: String
@@ -20,6 +21,7 @@ public struct BatchConfig: Codable {
     public init(
         files: [String],
         outputDir: String?,
+        markdownOutputDir: String? = nil,
         writeNextToSource: Bool,
         profileID: String,
         runtime: String,
@@ -34,6 +36,7 @@ public struct BatchConfig: Codable {
     ) {
         self.files = files
         self.outputDir = outputDir
+        self.markdownOutputDir = markdownOutputDir
         self.writeNextToSource = writeNextToSource
         self.profileID = profileID
         self.runtime = runtime

@@ -5,6 +5,7 @@ import Sparkle
 
 @main
 struct CanaryTranscriberApp: App {
+    @StateObject private var viewModel = TranscriptionViewModel()
     private let updaterController = SPUStandardUpdaterController(
         startingUpdater: true,
         updaterDelegate: nil,
@@ -13,9 +14,9 @@ struct CanaryTranscriberApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(viewModel: viewModel)
         }
-        .windowResizability(.contentMinSize)
+        .windowResizability(.automatic)
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates…") {
@@ -44,6 +45,10 @@ License: MIT
                     )
                 }
             }
+        }
+
+        Settings {
+            SettingsRootView(viewModel: viewModel)
         }
     }
 }

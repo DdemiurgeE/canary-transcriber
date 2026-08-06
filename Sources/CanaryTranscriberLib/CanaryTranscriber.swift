@@ -61,67 +61,14 @@ enum DependencyStatus {
     case updatable
 }
 
-struct FastTooltipModifier: ViewModifier {
-    let text: String
-    @State private var show = false
-    private let delay: Double = 0.35
-
-    func body(content: Content) -> some View {
-        content
-            .overlay(alignment: .bottom) {
-                if show {
-                    Text(text)
-                        .font(.caption)
-                        .padding(6)
-                        .background(.regularMaterial)
-                        .cornerRadius(4)
-                        .fixedSize()
-                        .offset(y: 32)
-                        .transition(.opacity.animation(.easeInOut(duration: 0.1)))
-                }
-            }
-            .onHover { hovering in
-                if hovering {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                        show = true
-                    }
-                } else {
-                    show = false
-                }
-            }
-    }
-}
-
-extension View {
-    func fastTooltip(_ text: String) -> some View {
-        modifier(FastTooltipModifier(text: text))
-    }
-}
-
 public struct ContentView: View {
-    @StateObject private var viewModel: TranscriptionViewModel
+    @ObservedObject private var viewModel: TranscriptionViewModel
 
-    public init() {
-        _viewModel = StateObject(wrappedValue: TranscriptionViewModel())
+    public init(viewModel: TranscriptionViewModel) {
+        self.viewModel = viewModel
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HeaderView(viewModel: viewModel)
-            DependencyPanelView(viewModel: viewModel)
-            SettingsView(viewModel: viewModel)
-            AppAudioCaptureView(viewModel: viewModel)
-            FilesView(viewModel: viewModel)
-            ControlsPanelView(viewModel: viewModel)
-            LogView(viewModel: viewModel)
-        }
-        .padding(16)
-        .frame(minWidth: 1080, idealWidth: 1120, minHeight: 820, idealHeight: 900)
-        .onAppear {
-            viewModel.bringAppToFront()
-            viewModel.refreshCaptureApps()
-            viewModel.refreshMicrophones()
-            viewModel.checkDependencies()
-        }
+        LibraryView(viewModel: viewModel)
     }
 }

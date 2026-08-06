@@ -48,9 +48,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.6.0</string>
+    <string>0.7.0</string>
     <key>CFBundleVersion</key>
-    <string>8</string>
+    <string>9</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
@@ -82,10 +82,11 @@ install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/Mac
 cleanup_xattrs() {
   local target="$1"
   xattr -cr "$target" 2>/dev/null || true
-  xattr -dr com.apple.FinderInfo "$target" 2>/dev/null || true
-  xattr -dr com.apple.ResourceFork "$target" 2>/dev/null || true
-  xattr -dr com.apple.fileprovider.fpfs#P "$target" 2>/dev/null || true
-  xattr -dr com.apple.provenance "$target" 2>/dev/null || true
+  # xattr -r's own recursion misses some files inside Sparkle.framework (symlinked
+  # Versions/Current tree) even after -cr, which then trips codesign with "resource
+  # fork, Finder information, or similar detritus not allowed". Walk every file
+  # explicitly as a second pass to be sure.
+  find "$target" -print0 | xargs -0 xattr -c 2>/dev/null || true
 }
 
 cleanup_xattrs "$APP"

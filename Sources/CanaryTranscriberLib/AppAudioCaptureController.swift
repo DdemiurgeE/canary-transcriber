@@ -6,6 +6,10 @@ import CanaryTranscriberCore
 
 final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutput, SCStreamDelegate {
     @Published private(set) var isRecording = false
+    /// True from the moment Stop is pressed until the mixed file is ready — flushing the
+    /// writers and mixing app+mic through ffmpeg can take a while for long recordings, and
+    /// without this the app looks idle/like nothing was recorded during that gap.
+    @Published private(set) var isFinishing = false
 
     private final class RealtimeAudioFileWriter {
         let url: URL
@@ -184,6 +188,7 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
         let streamToStop = stream
         onLog?("⏹️ Stopping app/mic audio capture...\n")
         isRecording = false
+        isFinishing = true
         Task {
             if let streamToStop {
                 try? await streamToStop.stopCapture()
@@ -270,6 +275,7 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
                     self.mixedOutputURL = nil
                     self.includeMicrophone = false
                     self.isRecording = false
+                    self.isFinishing = false
                     self.onFinished?(finalResult)
                 }
             }
@@ -285,5 +291,6 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
         mixedOutputURL = nil
         includeMicrophone = false
         isRecording = false
+        isFinishing = false
     }
 }

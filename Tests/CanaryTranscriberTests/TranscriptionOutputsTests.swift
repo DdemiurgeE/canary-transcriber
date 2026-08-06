@@ -22,6 +22,17 @@ final class TranscriptionOutputsTests: XCTestCase {
         XCTAssertEqual(paths.markdown.path, "/output/transcripts/meeting.canary.md")
     }
 
+    func testOutputPathsUseSeparateMarkdownDirectoryWhenConfigured() {
+        let source = URL(fileURLWithPath: "/input/meeting.wav")
+        let output = URL(fileURLWithPath: "/output/transcripts")
+        let markdownDir = URL(fileURLWithPath: "/output/notes-vault")
+        let paths = TranscriptionOutputPaths(sourceURL: source, outputDirectory: output, writeNextToSource: false, markdownDirectory: markdownDir)
+
+        XCTAssertEqual(paths.text.path, "/output/transcripts/meeting.canary.txt")
+        XCTAssertEqual(paths.json.path, "/output/transcripts/meeting.canary.json")
+        XCTAssertEqual(paths.markdown.path, "/output/notes-vault/meeting.canary.md")
+    }
+
     func testFrontMatterEscapesQuotesAndUsesStableFieldOrder() {
         let frontMatter = TranscriptionFrontMatter(
             source: "meeting: Pavel's test.m4a",
