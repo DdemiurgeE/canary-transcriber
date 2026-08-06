@@ -89,8 +89,22 @@ cleanup_xattrs() {
   find "$target" -print0 | xargs -0 xattr -c 2>/dev/null || true
 }
 
-cleanup_xattrs "$APP"
-codesign --force --deep --sign - "$APP" >/dev/null
+# macOS sometimes re-tags files with com.apple.provenance/FinderInfo mid-codesign (observed
+# on freshly ditto'd/built bundles), so a single strip+sign can still fail with "resource
+# fork, Finder information, or similar detritus not allowed". Retry a few times.
+signed=false
+for attempt in 1 2 3 4 5; do
+  cleanup_xattrs "$APP"
+  if codesign --force --deep --sign - "$APP" >/dev/null 2>/tmp/canary-codesign-err.log; then
+    signed=true
+    break
+  fi
+  echo "codesign attempt $attempt failed, retrying: $(tail -1 /tmp/canary-codesign-err.log)"
+done
+if [[ "$signed" != true ]]; then
+  echo "codesign failed after multiple attempts" >&2
+  exit 1
+fi
 cleanup_xattrs "$APP"
 codesign --verify --deep --verbose=2 "$APP"
 
