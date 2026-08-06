@@ -8,6 +8,7 @@ struct SessionDetailView: View {
 
     @State private var transcript: SessionTranscript?
     @State private var loadError: String?
+    @State private var plainFallbackText: String?
     @State private var showingLog = false
     @State private var renamingSpeaker: String?
     @State private var aliasDraft: String = ""
@@ -84,7 +85,12 @@ struct SessionDetailView: View {
             }
         }
         .onAppear { loadTranscriptIfNeeded(session) }
-        .onChange(of: session.jsonPath) { transcript = nil; loadTranscriptIfNeeded(session) }
+        .onChange(of: session.jsonPath) {
+            transcript = nil
+            loadError = nil
+            plainFallbackText = nil
+            loadTranscriptIfNeeded(session)
+        }
     }
 
     private func chip(_ text: String) -> some View {
@@ -120,11 +126,23 @@ struct SessionDetailView: View {
         if let transcript {
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(Array(transcript.displaySegments.enumerated()), id: \.offset) { _, segment in
-                    segmentRow(segment)
+                    segmentRow(segment, session: session)
                 }
             }
+        } else if let plainFallbackText {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Speaker-by-speaker breakdown isn't available for this session — showing the plain transcript instead.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(plainFallbackText)
+            }
         } else if let loadError {
-            Text(loadError).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(loadError).foregroundStyle(.secondary)
+                Button("Re-transcribe") {
+                    viewModel.requeueForTranscription(sessionIDs: [session.id], forceDiarization: session.diarizationEnabled)
+                }
+            }
         } else if session.status == .processing || session.status == .queued {
             Text("Transcript will appear once processing finishes.").foregroundStyle(.secondary)
         } else if session.status == .failed {
@@ -135,7 +153,7 @@ struct SessionDetailView: View {
     }
 
     @ViewBuilder
-    private func segmentRow(_ segment: SessionTranscriptSegment) -> some View {
+    private func segmentRow(_ segment: SessionTranscriptSegment, session: SessionRecord) -> some View {
         HStack(alignment: .top, spacing: 10) {
             if let speaker = segment.speaker {
                 Button(displayName(for: speaker)) {
@@ -152,7 +170,7 @@ struct SessionDetailView: View {
                     get: { renamingSpeaker == speaker },
                     set: { if !$0 { renamingSpeaker = nil } }
                 )) {
-                    renamePopover(speaker)
+                    renamePopover(speaker, session: session)
                 }
             }
             VStack(alignment: .leading, spacing: 2) {
@@ -162,14 +180,20 @@ struct SessionDetailView: View {
         }
     }
 
-    private func renamePopover(_ speaker: String) -> some View {
+    private func renamePopover(_ speaker: String, session: SessionRecord) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Rename speaker").font(.caption).foregroundStyle(.secondary)
             TextField(speaker, text: $aliasDraft)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 180)
+            Text("Also updates this session's .json/.md output.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
             Button("Save") {
                 viewModel.setSpeakerAlias(aliasDraft, for: speaker)
+                if let transcript {
+                    viewModel.rewriteOutputsAfterSpeakerRename(alias: aliasDraft, speaker: speaker, session: session, transcript: transcript)
+                }
                 renamingSpeaker = nil
             }
             .buttonStyle(.borderedProminent)
@@ -198,11 +222,28 @@ struct SessionDetailView: View {
     }
 
     private func loadTranscriptIfNeeded(_ session: SessionRecord) {
-        guard transcript == nil, loadError == nil, let jsonPath = session.jsonPath else { return }
+        guard transcript == nil, loadError == nil, plainFallbackText == nil else { return }
+        guard let jsonPath = session.jsonPath else {
+            loadPlainFallback(session)
+            return
+        }
         do {
             transcript = try SessionTranscript.load(from: URL(fileURLWithPath: jsonPath))
         } catch {
-            loadError = "Couldn't read transcript: \(error.localizedDescription)"
+            if !loadPlainFallback(session) {
+                loadError = "Couldn't read transcript at \(jsonPath): \(error.localizedDescription)"
+            }
         }
+    }
+
+    /// Falls back to the plain .txt output (no speaker structure) when the .canary.json is
+    /// missing or unreadable — e.g. the output folder changed after the run that produced it.
+    @discardableResult
+    private func loadPlainFallback(_ session: SessionRecord) -> Bool {
+        guard let textPath = session.textPath,
+              let text = try? String(contentsOfFile: textPath, encoding: .utf8),
+              !text.isEmpty else { return false }
+        plainFallbackText = text
+        return true
     }
 }

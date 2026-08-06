@@ -154,4 +154,57 @@ extension TranscriptionViewModel {
         let path = session.jsonPath ?? session.textPath ?? session.sourceAudioPath
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
+
+    /// Renaming a speaker only changed the live alias mapping (future runs + on-screen
+    /// display) — this patches the already-written .canary.json/.canary.md for this specific
+    /// session so the rename shows up in files that already exist on disk. .canary.txt never
+    /// carries alias names (the pipeline always writes raw SPEAKER_XX labels there), so it's
+    /// left untouched.
+    func rewriteOutputsAfterSpeakerRename(alias: String, speaker: String, session: SessionRecord, transcript: SessionTranscript) {
+        if let jsonPath = session.jsonPath {
+            rewriteJSONAlias(alias: alias, speaker: speaker, at: jsonPath)
+        }
+        if let markdownPath = session.markdownPath {
+            rewriteMarkdownAlias(session: session, transcript: transcript, at: markdownPath)
+        }
+    }
+
+    private func rewriteJSONAlias(alias: String, speaker: String, at path: String) {
+        guard let data = FileManager.default.contents(atPath: path),
+              var payload = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+        if var summary = payload["speaker_summary"] as? [[String: Any]] {
+            for idx in summary.indices where summary[idx]["speaker"] as? String == speaker {
+                summary[idx]["alias"] = alias
+            }
+            payload["speaker_summary"] = summary
+        }
+        if var aliasesDict = payload["speaker_aliases"] as? [String: String] {
+            aliasesDict[speaker] = alias
+            payload["speaker_aliases"] = aliasesDict
+        }
+        guard let newData = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]) else { return }
+        try? newData.write(to: URL(fileURLWithPath: path))
+    }
+
+    private func rewriteMarkdownAlias(session: SessionRecord, transcript: SessionTranscript, at path: String) {
+        let existing = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
+        let frontMatter = Self.frontMatterBlock(of: existing)
+        let segments = transcript.displaySegments.compactMap { segment -> SpeakerSegment? in
+            guard let speaker = segment.speaker else { return nil }
+            return SpeakerSegment(speaker: speaker, start: segment.start, end: segment.end, text: segment.text)
+        }
+        let sourceName = URL(fileURLWithPath: session.sourceAudioPath).lastPathComponent
+        let body = MeetingWorkspace(sourceName: sourceName, segments: segments, aliases: parsedSpeakerAliases(), fallbackText: transcript.text).render()
+        try? (frontMatter + body).write(toFile: path, atomically: true, encoding: .utf8)
+    }
+
+    /// The YAML front matter block (including both `---` delimiters) at the top of a
+    /// `.canary.md` file, preserved verbatim so a rename doesn't drop metadata this app
+    /// doesn't model (chunking, timestamps, diarization run info, ...).
+    private static func frontMatterBlock(of markdown: String) -> String {
+        guard markdown.hasPrefix("---\n") else { return "" }
+        let afterOpening = markdown.dropFirst(4)
+        guard let closingRange = afterOpening.range(of: "\n---\n") else { return "" }
+        return String(markdown[..<closingRange.upperBound])
+    }
 }
