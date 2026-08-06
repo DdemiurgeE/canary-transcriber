@@ -2,7 +2,7 @@
 
 A small native macOS SwiftUI app for batch transcription with local MLX speech-to-text profiles.
 
-The latest published release is **[v0.7.1](../../releases/tag/v0.7.1)**. It adds a permanent Logs button to the Library so long transcriptions no longer look stalled, on top of the v0.7.0 UI rebuild (Library/Session/Settings workflow, session history, resizable windows) and ffmpeg hang fixes.
+The latest published release is **[v0.7.2](../../releases/tag/v0.7.2)**. It fixes a confusing path-less error when a session's `.canary.json` can't be found (falls back to the plain transcript instead) and makes speaker renames patch the already-written `.canary.json`/`.canary.md`, on top of the v0.7.x UI rebuild (Library/Session/Settings workflow, session history, resizable windows, live logs) and ffmpeg hang fixes.
 
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 
