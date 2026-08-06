@@ -16,8 +16,6 @@ struct SessionDetailView: View {
     @State private var draftSpeakerCount: String = ""
     @State private var draftAliases: String = ""
     @State private var logDrawerHeight: CGFloat = 160
-    @State private var logDrawerHeightAtDragStart: CGFloat?
-    @State private var isResizeCursorPushed = false
 
     private var session: SessionRecord? {
         viewModel.librarySessions.first(where: { $0.id == sessionID })
@@ -45,7 +43,10 @@ struct SessionDetailView: View {
             }
 
             if showingLog {
-                logDrawer(session)
+                ResizableLogPanel(
+                    height: $logDrawerHeight,
+                    text: session.status == .processing ? viewModel.logs : (session.logExcerpt.isEmpty ? "No log yet." : session.logExcerpt)
+                )
             }
         }
         .navigationTitle(session.displayName)
@@ -194,67 +195,6 @@ struct SessionDetailView: View {
     private func formatTime(_ seconds: Double) -> String {
         let total = max(0, Int(seconds))
         return String(format: "%02d:%02d:%02d", total / 3600, (total % 3600) / 60, total % 60)
-    }
-
-    private func logDrawer(_ session: SessionRecord) -> some View {
-        VStack(spacing: 0) {
-            logDrawerHandle
-            ScrollView {
-                Text(session.status == .processing ? viewModel.logs : (session.logExcerpt.isEmpty ? "No log yet." : session.logExcerpt))
-                    .font(.system(.caption2, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(8)
-            }
-            .frame(height: logDrawerHeight)
-            .background(Color(nsColor: .textBackgroundColor))
-        }
-    }
-
-    private var logDrawerHandle: some View {
-        ZStack {
-            Rectangle().fill(Color.clear)
-            Rectangle()
-                .fill(Color.secondary.opacity(0.2))
-                .frame(height: 6)
-            Capsule().fill(Color.secondary.opacity(0.5)).frame(width: 32, height: 3)
-        }
-        .frame(height: 10)
-        .contentShape(Rectangle())
-        .onHover { hovering in
-            if hovering {
-                pushResizeCursor()
-            } else if logDrawerHeightAtDragStart == nil {
-                popResizeCursor()
-            }
-        }
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { value in
-                    if logDrawerHeightAtDragStart == nil {
-                        logDrawerHeightAtDragStart = logDrawerHeight
-                        pushResizeCursor()
-                    }
-                    let proposed = (logDrawerHeightAtDragStart ?? logDrawerHeight) - value.translation.height
-                    logDrawerHeight = min(max(proposed, 80), 500)
-                }
-                .onEnded { _ in
-                    logDrawerHeightAtDragStart = nil
-                    popResizeCursor()
-                }
-        )
-    }
-
-    private func pushResizeCursor() {
-        guard !isResizeCursorPushed else { return }
-        isResizeCursorPushed = true
-        NSCursor.resizeUpDown.push()
-    }
-
-    private func popResizeCursor() {
-        guard isResizeCursorPushed else { return }
-        isResizeCursorPushed = false
-        NSCursor.pop()
     }
 
     private func loadTranscriptIfNeeded(_ session: SessionRecord) {

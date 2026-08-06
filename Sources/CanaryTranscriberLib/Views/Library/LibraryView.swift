@@ -8,6 +8,8 @@ struct LibraryView: View {
     @State private var showingNewRecording = false
     @State private var showingDiarizationSettings = false
     @State private var selectedIDs: Set<SessionRecord.ID> = []
+    @State private var showingLogs = false
+    @State private var logsPanelHeight: CGFloat = 180
 
     private var filteredSessions: [SessionRecord] {
         viewModel.librarySessions.filter { session in
@@ -130,6 +132,10 @@ struct LibraryView: View {
             .contentShape(Rectangle())
             .onDrop(of: [.fileURL], isTargeted: $viewModel.isFileDropTargeted, perform: viewModel.handleFileDrop(providers:))
 
+            if showingLogs {
+                ResizableLogPanel(height: $logsPanelHeight, text: viewModel.logs.isEmpty ? "No log yet." : viewModel.logs)
+            }
+
             actionBar
         }
     }
@@ -168,6 +174,7 @@ struct LibraryView: View {
             Text(hasSelection ? "Selected: \(count)" : "Ready to transcribe: \(count)")
                 .foregroundStyle(.secondary)
             Spacer()
+            Button(showingLogs ? "Hide logs" : "Logs") { showingLogs.toggle() }
             Button {
                 showingDiarizationSettings = true
             } label: {
