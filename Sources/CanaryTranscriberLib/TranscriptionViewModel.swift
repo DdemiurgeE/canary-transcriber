@@ -581,8 +581,12 @@ try:
             model_obj = load_model(model_name)
             print("Stage: model loaded", flush=True)
             def transcribe(path):
-                result = model_obj.transcribe(str(path), language=language, timestamps=timestamps)
-                return result.text if hasattr(result, "text") else str(result)
+                try:
+                    result = model_obj.transcribe(str(path), language=language, timestamps=timestamps)
+                    return result.text if hasattr(result, "text") else str(result)
+                finally:
+                    import mlx.core as mx
+                    mx.clear_cache()
             return transcribe
 
         if runtime_name == "mlx_whisper":
@@ -596,10 +600,14 @@ try:
                 if language:
                     kwargs["language"] = language
                 try:
-                    result = mlx_whisper.transcribe(str(path), **kwargs)
-                except TypeError:
-                    kwargs.pop("language", None)
-                    result = mlx_whisper.transcribe(str(path), **kwargs)
+                    try:
+                        result = mlx_whisper.transcribe(str(path), **kwargs)
+                    except TypeError:
+                        kwargs.pop("language", None)
+                        result = mlx_whisper.transcribe(str(path), **kwargs)
+                finally:
+                    import mlx.core as mx
+                    mx.clear_cache()
                 if isinstance(result, dict):
                     return str(result.get("text", ""))
                 return result.text if hasattr(result, "text") else str(result)
@@ -607,59 +615,36 @@ try:
 
         if runtime_name == "mlx_audio_cli":
             try:
-                import mlx_audio  # noqa: F401
+                import mlx.core as mx
+                from mlx_audio.stt.generate import generate_transcription
+                from mlx_audio.stt.utils import load_model as load_stt_model
             except Exception as exc:
                 raise RuntimeError("Python package mlx-audio is required for Parakeet/Canary v2/Voxtral profiles. Install: python -m pip install 'mlx-audio[stt]' or python -m pip install mlx-audio") from exc
-            print("Stage: mlx_audio CLI ready", flush=True)
-
-            def build_mlx_audio_command(path, out_file):
-                cmd = [
-                    sys.executable, "-m", "mlx_audio.stt.generate",
-                    "--model", model_name,
-                    "--audio", str(path),
-                    "--output-path", str(out_file),
-                    "--format", "txt",
-                ]
-                lang_kwargs = {}
-                if language:
-                    cmd.extend(["--language", language])
-                    lang_kwargs = {"source_lang": language, "target_lang": language}
-                    cmd.extend(["--gen-kwargs", json.dumps(lang_kwargs, ensure_ascii=False)])
-                return cmd, lang_kwargs
+            print(f"Stage: load_model({model_name}) via mlx-audio", flush=True)
+            model_obj = load_stt_model(model_name)
+            print("Stage: mlx-audio model loaded", flush=True)
 
             def transcribe(path):
                 with tempfile.TemporaryDirectory(prefix="mlx-audio-out-") as out_tmp:
-                    out_dir = Path(out_tmp)
-                    out_file = out_dir / "transcript.txt"
-                    cmd, lang_kwargs = build_mlx_audio_command(path, out_file)
-                    print("Stage: mlx-audio command language=" + str(language) + " gen_kwargs=" + json.dumps(lang_kwargs, ensure_ascii=False), flush=True)
-                    proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                    output = proc.stdout or ""
-                    if proc.returncode != 0 and language:
-                        # Compatibility fallback for older mlx-audio versions that
-                        # reject --language; keep gen-kwargs only when possible.
-                        cmd = [x for x in cmd if x not in ["--language", language]]
-                        proc = subprocess.run(cmd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                        output = proc.stdout or ""
-                    if proc.returncode != 0:
-                        raise RuntimeError(f"mlx-audio CLI failed with code {proc.returncode}: {output[-4000:]}")
-                    text_candidates = []
-                    for candidate in sorted(out_dir.rglob("*")):
-                        if candidate.is_file() and candidate.suffix.lower() in {".txt", ".text", ".md"}:
-                            text_candidates.append(candidate.read_text(encoding="utf-8", errors="ignore"))
-                        elif candidate.is_file() and candidate.suffix.lower() == ".json":
-                            try:
-                                data = json.loads(candidate.read_text(encoding="utf-8", errors="ignore"))
-                                if isinstance(data, dict):
-                                    for key in ["text", "transcription", "transcript"]:
-                                        if data.get(key):
-                                            text_candidates.append(str(data[key]))
-                            except Exception:
-                                pass
-                    joined = "\n".join(t.strip() for t in text_candidates if t.strip()).strip()
-                    if joined:
-                        return joined
-                    return "\n".join(line for line in output.splitlines() if line.strip() and not line.startswith("Stage:") and not line.startswith("Fetching ") and "it/s]" not in line)
+                    out_stub = str(Path(out_tmp) / "transcript")
+                    kwargs = {}
+                    if language:
+                        kwargs["language"] = language
+                        kwargs["gen_kwargs"] = {"source_lang": language, "target_lang": language}
+                    try:
+                        segments = generate_transcription(
+                            model=model_obj,
+                            audio=str(path),
+                            output_path=out_stub,
+                            format="txt",
+                            **kwargs,
+                        )
+                    finally:
+                        mx.clear_cache()
+                    text = getattr(segments, "text", None)
+                    if text is None:
+                        raise RuntimeError("mlx-audio returned no text for this segment.")
+                    return text
             return transcribe
 
         raise RuntimeError(f"Unknown runtime: {runtime_name}. Supported: canary_mlx, mlx_whisper, mlx_audio_cli")
@@ -709,6 +694,8 @@ try:
                 for segment, _, label in result.speaker_diarization.itertracks(yield_label=True):
                     segments.append({"speaker": label, "start": round(segment.start, 3), "end": round(segment.end, 3)})
                 emit("stage", name="diarization_completed", segments=len(segments))
+                if torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
                 return segments
 
             return diarize
@@ -884,6 +871,11 @@ try:
                 raise
             midpoint = start + duration / 2.0
             print(f"WARNING: MLX memory failure for {label}; retrying as two smaller chunks ({duration:.1f}s -> {duration / 2.0:.1f}s)", flush=True)
+            try:
+                import mlx.core as mx
+                mx.clear_cache()
+            except Exception:
+                pass
             retry_text = []
             for retry_index, (retry_start, retry_end) in enumerate(((start, midpoint), (midpoint, end))):
                 retry_path = Path(work_dir) / f"{label}_retry_{retry_index:02d}.wav"
