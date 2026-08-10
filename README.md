@@ -2,7 +2,7 @@
 
 A small native macOS SwiftUI app for batch transcription with local MLX speech-to-text profiles.
 
-The latest published release is **[v0.7.2](../../releases/tag/v0.7.2)**. It fixes a confusing path-less error when a session's `.canary.json` can't be found (falls back to the plain transcript instead) and makes speaker renames patch the already-written `.canary.json`/`.canary.md`, on top of the v0.7.x UI rebuild (Library/Session/Settings workflow, session history, resizable windows, live logs) and ffmpeg hang fixes.
+The latest published release is **[v0.7.3](../../releases/tag/v0.7.3)**. It stops the Parakeet/Canary v2/Voxtral runtime from reloading its multi-GB model on every audio chunk (the cause of transcription pegging system-wide CPU/GPU/memory and, under that pressure, occasionally producing garbage output) — the model now loads once and stays resident for the whole batch, on top of the v0.7.x UI rebuild (Library/Session/Settings workflow, session history, resizable windows, live logs) and ffmpeg hang fixes.
 
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 
