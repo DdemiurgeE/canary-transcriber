@@ -2,7 +2,7 @@
 
 A small native macOS SwiftUI app for batch transcription with local MLX speech-to-text profiles.
 
-The latest published release is **[v0.7.3](../../releases/tag/v0.7.3)**. It stops the Parakeet/Canary v2/Voxtral runtime from reloading its multi-GB model on every audio chunk (the cause of transcription pegging system-wide CPU/GPU/memory and, under that pressure, occasionally producing garbage output) — the model now loads once and stays resident for the whole batch, on top of the v0.7.x UI rebuild (Library/Session/Settings workflow, session history, resizable windows, live logs) and ffmpeg hang fixes.
+The latest published release is **[v0.7.4](../../releases/tag/v0.7.4)**. It adds Live Capture with five-second app+microphone segments, local MLX transcription, live transcript updates, and incremental `.canary.txt/.json/.md` export.
 
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 
@@ -123,6 +123,20 @@ If the DMG path is inconvenient, download `CanaryTranscriber.app.zip`, unzip it,
 This path captures the selected app before audio reaches the output device, so it works while listening through headphones. It does not require BlackHole/Loopback. App audio uses ScreenCaptureKit; microphone recording uses AVAudioEngine for the selected CoreAudio input device, then `ffmpeg` `amix` after Stop. The mix is microphone-priority: app audio is attenuated and microphone audio is noise-filtered, dynamically normalized, and boosted before limiting. This avoids ScreenCaptureKit `.microphone` dropping mic samples when the captured app is also producing audio. If the selected app is audible through speakers, the physical microphone may still pick it up; use headphones to avoid acoustic bleed.
 
 For MLX/Metal memory errors, lower `Chunk sec` to `15` or `10`.
+
+### Live Capture
+
+Live Capture transcribes a running app while it is recording:
+
+1. Open **App Audio Capture — ScreenCaptureKit**.
+2. Click **Refresh apps** and select the target application.
+3. Select a microphone, or leave **System default microphone**.
+4. Click the waveform-plus button to start five-second live segments.
+5. Allow Screen Recording and Microphone permissions when macOS asks.
+6. Watch the **Live Transcript** panel while the local MLX runtime processes each closed segment.
+7. Click Stop. The transcript is continuously saved under `~/Documents/CanaryTranscripts/LiveCaptures/` as `.canary.txt`, `.canary.json`, and `.canary.md`.
+
+Live Capture uses local processing only. If the MLX runtime is slower than the capture rate, segments remain serialized to avoid concurrent Metal model access.
 
 ## Build from source
 

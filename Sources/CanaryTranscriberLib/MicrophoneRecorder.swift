@@ -71,7 +71,7 @@ final class MicrophoneEngineRecorder {
         }
     }
 
-    private static func audioDeviceID(matchingUID targetUID: String) -> AudioDeviceID? {
+    static func audioDeviceID(matchingUID targetUID: String) -> AudioDeviceID? {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,
             mScope: kAudioObjectPropertyScopeGlobal,

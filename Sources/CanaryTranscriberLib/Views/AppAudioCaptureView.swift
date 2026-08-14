@@ -43,6 +43,20 @@ struct AppAudioCaptureView: View {
                         }
                         .help("Stop recording")
                         .disabled(!viewModel.appAudioCapture.isRecording)
+
+                        Button(action: { viewModel.startLiveCapture() }) {
+                            Image(systemName: "waveform.badge.plus")
+                                .font(.title)
+                        }
+                        .help("Start live transcription of app audio")
+                        .disabled(viewModel.liveAppCapture.isCapturing || viewModel.liveAppCapture.isFinishing || viewModel.selectedCaptureApp == nil)
+
+                        Button(action: { viewModel.stopLiveCapture() }) {
+                            Image(systemName: "stop.circle.fill")
+                                .font(.title)
+                        }
+                        .help("Stop live transcription")
+                        .disabled(!viewModel.liveAppCapture.isCapturing)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
@@ -60,6 +74,30 @@ struct AppAudioCaptureView: View {
 
                     Button("Refresh mics") { viewModel.refreshMicrophones() }
                         .disabled(viewModel.appAudioCapture.isRecording || viewModel.isRunning)
+                }
+
+                if !viewModel.liveTranscript.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Live Transcript")
+                                .font(.headline)
+                            if viewModel.isLiveTranscribing {
+                                ProgressView().controlSize(.small)
+                                Text("transcribing")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        ScrollView {
+                            Text(viewModel.liveTranscript)
+                                .font(.body.monospaced())
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .textSelection(.enabled)
+                        }
+                        .frame(minHeight: 80, maxHeight: 180)
+                        .padding(8)
+                        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+                    }
                 }
 
                 if viewModel.appAudioCapture.isFinishing {
