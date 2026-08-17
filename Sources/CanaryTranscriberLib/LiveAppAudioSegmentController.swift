@@ -145,8 +145,8 @@ final class LiveAppAudioSegmentController: NSObject, ObservableObject, SCStreamO
                 onLog("Live capture started: \(target.title), \(Int(self.segmentDuration))s segments.\n")
             }
         } catch {
-            cleanup()
             await MainActor.run {
+                cleanup()
                 onLog("Live capture failed to start: \(error.localizedDescription)\n")
                 onFinished(.failure(error))
             }
@@ -154,6 +154,10 @@ final class LiveAppAudioSegmentController: NSObject, ObservableObject, SCStreamO
     }
 
     func stop() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.stop() }
+            return
+        }
         guard isCapturing || stream != nil || writer != nil else { return }
         isCapturing = false
         isFinishing = true

@@ -49,25 +49,29 @@ extension TranscriptionViewModel {
                     }
                 },
                 onSegmentReady: { [weak self] index, url, duration in
-                    guard let self else { return }
-                    let start = Double(index) * config.windowDuration
-                    self.logs += "Stage: transcribing live segment \(index + 1)\n"
-                    self.liveTranscriptionWorker.submit(
-                        segmentURL: url,
-                        index: index,
-                        start: start,
-                        end: start + max(0, duration),
-                        config: config
-                    ) { [weak self] result in
+                    DispatchQueue.main.async {
                         guard let self else { return }
-                        switch result {
-                        case .success(let segment):
-                            if self.liveTranscriptAccumulator.append(segment) {
-                                self.liveTranscript = self.liveTranscriptAccumulator.renderTimestamped()
-                                self.persistLiveTranscript(config: config)
+                        let start = Double(index) * config.windowDuration
+                        self.logs += "Stage: transcribing live segment \(index + 1)\n"
+                        self.liveTranscriptionWorker.submit(
+                            segmentURL: url,
+                            index: index,
+                            start: start,
+                            end: start + max(0, duration),
+                            config: config
+                        ) { [weak self] result in
+                            DispatchQueue.main.async {
+                                guard let self else { return }
+                                switch result {
+                                case .success(let segment):
+                                    if self.liveTranscriptAccumulator.append(segment) {
+                                        self.liveTranscript = self.liveTranscriptAccumulator.renderTimestamped()
+                                        self.persistLiveTranscript(config: config)
+                                    }
+                                case .failure(let error):
+                                    self.logs += "⚠️ Live segment transcription failed: \(error.localizedDescription)\n"
+                                }
                             }
-                        case .failure(let error):
-                            self.logs += "⚠️ Live segment transcription failed: \(error.localizedDescription)\n"
                         }
                     }
                 },

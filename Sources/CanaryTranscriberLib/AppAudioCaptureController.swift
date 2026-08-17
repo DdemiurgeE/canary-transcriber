@@ -175,8 +175,8 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
                 onLog("   macOS may request Screen Recording and Microphone permissions for Canary Transcriber.\n")
             }
         } catch {
-            cleanupAfterFailure()
             await MainActor.run {
+                cleanupAfterFailure()
                 onLog("❌ Failed to start app audio capture: \(error.localizedDescription)\n")
                 onFinished(.failure(error))
             }
@@ -184,6 +184,10 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
     }
 
     func stop() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.stop() }
+            return
+        }
         guard isRecording || stream != nil || appAudioWriter != nil || microphoneRecorder != nil else { return }
         let streamToStop = stream
         onLog?("⏹️ Stopping app/mic audio capture...\n")
