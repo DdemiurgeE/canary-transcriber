@@ -52,7 +52,9 @@ extension TranscriptionViewModel {
                     DispatchQueue.main.async {
                         guard let self else { return }
                         let start = Double(index) * config.windowDuration
-                        self.logs += "Stage: transcribing live segment \(index + 1)\n"
+                        let stage = "Stage: transcribing live segment \(index + 1)\n"
+                        self.logs += stage
+                        self.appendPersistentLog(stage)
                         self.liveTranscriptionWorker.submit(
                             segmentURL: url,
                             index: index,
@@ -69,7 +71,9 @@ extension TranscriptionViewModel {
                                         self.persistLiveTranscript(config: config)
                                     }
                                 case .failure(let error):
-                                    self.logs += "⚠️ Live segment transcription failed: \(error.localizedDescription)\n"
+                                    let message = "⚠️ Live segment transcription failed: \(error.localizedDescription)\n"
+                                    self.logs += message
+                                    self.appendPersistentLog(message)
                                 }
                             }
                         }
@@ -78,12 +82,16 @@ extension TranscriptionViewModel {
                 onFinished: { [weak self] result in
                     DispatchQueue.main.async {
                         guard let self else { return }
-                        self.isLiveTranscribing = false
-                        switch result {
-                        case .success:
-                            self.logs += "Live Capture stopped.\n"
-                        case .failure(let error):
-                            self.logs += "❌ Live Capture failed: \(error.localizedDescription)\n"
+                        self.liveTranscriptionWorker.drain {
+                            self.persistLiveTranscript(config: config)
+                            self.liveTranscriptionWorker.stop()
+                            self.isLiveTranscribing = false
+                            switch result {
+                            case .success:
+                                self.logs += "Live Capture stopped.\n"
+                            case .failure(let error):
+                                self.logs += "❌ Live Capture failed: \(error.localizedDescription)\n"
+                            }
                         }
                     }
                 }
@@ -92,7 +100,7 @@ extension TranscriptionViewModel {
     }
 
     private func persistLiveTranscript(config: LiveCaptureConfig) {
-        guard let base = liveExportBaseURL, !liveTranscriptAccumulator.segments.isEmpty else { return }
+        guard let base = liveExportBaseURL else { return }
         do {
             try FileManager.default.createDirectory(at: base.deletingLastPathComponent(), withIntermediateDirectories: true)
             let textURL = base.appendingPathExtension("txt")
@@ -130,7 +138,5 @@ extension TranscriptionViewModel {
 
     func stopLiveCapture() {
         liveAppCapture.stop()
-        liveTranscriptionWorker.stop()
-        isLiveTranscribing = false
     }
 }

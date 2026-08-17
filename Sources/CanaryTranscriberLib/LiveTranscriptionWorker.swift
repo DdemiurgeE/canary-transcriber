@@ -7,6 +7,14 @@ final class LiveTranscriptionWorker {
     private var task: (any ProcessRunningTask)?
     private var stopped = false
 
+    func drain(completion: @escaping () -> Void) {
+        queue.async {
+            DispatchQueue.main.async {
+                completion()
+            }
+        }
+    }
+
     func stop() {
         queue.sync {
             stopped = true
