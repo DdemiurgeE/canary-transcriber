@@ -76,7 +76,7 @@ struct AppAudioCaptureView: View {
                         .disabled(viewModel.appAudioCapture.isRecording || viewModel.isRunning)
                 }
 
-                if !viewModel.liveTranscript.isEmpty {
+                if viewModel.isLiveTranscribing || !viewModel.liveTranscript.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Live Transcript")
@@ -89,7 +89,7 @@ struct AppAudioCaptureView: View {
                             }
                         }
                         ScrollView {
-                            Text(viewModel.liveTranscript)
+                            Text(viewModel.liveTranscript.isEmpty ? "Waiting for the first audio window…" : viewModel.liveTranscript)
                                 .font(.body.monospaced())
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .textSelection(.enabled)
