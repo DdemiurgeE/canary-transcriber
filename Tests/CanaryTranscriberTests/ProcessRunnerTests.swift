@@ -6,6 +6,7 @@ final class ProcessRunnerTests: XCTestCase {
     func testCapturesInterleavedStdoutAndStderrAndFinalPartialLine() throws {
         let runner = ProcessRunner()
         let finished = expectation(description: "process terminates")
+        let partialReceived = expectation(description: "final partial stdout line received")
         let lock = NSLock()
         var events: [ProcessOutputEvent] = []
         var result: ProcessResult?
@@ -18,7 +19,11 @@ final class ProcessRunnerTests: XCTestCase {
             onOutput: { event in
                 lock.lock()
                 events.append(event)
+                let isFinalPartialStdout = event.channel == .stdout && event.text == "partial" && event.isFinalPartialLine
                 lock.unlock()
+                if isFinalPartialStdout {
+                    partialReceived.fulfill()
+                }
             },
             onTermination: { termination in
                 lock.lock()
@@ -28,7 +33,7 @@ final class ProcessRunnerTests: XCTestCase {
             }
         )
 
-        wait(for: [finished], timeout: 2)
+        wait(for: [finished, partialReceived], timeout: 2)
         XCTAssertEqual(result?.terminationStatus, 0)
         XCTAssertTrue(events.contains { $0.channel == .stdout && $0.text == "out-1\n" })
         XCTAssertTrue(events.contains { $0.channel == .stderr && $0.text == "err-1\n" })
