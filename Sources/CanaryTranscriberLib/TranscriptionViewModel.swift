@@ -7,6 +7,7 @@ import AudioToolbox
 import ScreenCaptureKit
 import CanaryTranscriberCore
 
+// swiftlint:disable type_body_length
 public final class TranscriptionViewModel: ObservableObject {
     @Published var files: [AudioFileItem] = []
     @Published var selectedFileID: AudioFileItem.ID?
