@@ -461,6 +461,7 @@ public final class TranscriptionViewModel: ObservableObject {
     func runPython(configURL: URL, pythonPath: String, config: BatchConfig) {
         let script = #"""
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -496,6 +497,35 @@ try:
     if not isinstance(speaker_aliases, dict):
         speaker_aliases = {}
     speaker_aliases = {str(k): str(v).strip() for k, v in speaker_aliases.items() if str(k).strip() and str(v).strip()}
+
+    # Finder/LaunchServices may pass a stale local HTTP(S) proxy to the
+    # child process. The model cache is local, so never require that proxy
+    # for a cached model; direct Hub access remains available for cache misses.
+    for proxy_var in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        os.environ.pop(proxy_var, None)
+
+    def resolve_cached_model(model_name):
+        model_path = Path(model_name).expanduser()
+        if model_path.is_dir():
+            return str(model_path)
+        if "/" not in model_name:
+            return model_name
+        cache_root = Path.home() / ".cache" / "huggingface" / "hub"
+        model_dir = cache_root / ("models--" + model_name.replace("/", "--"))
+        if not model_dir.is_dir():
+            return model_name
+        ref_file = model_dir / "refs" / "main"
+        candidates = []
+        if ref_file.exists():
+            revision = ref_file.read_text(encoding="utf-8").strip()
+            if revision:
+                candidates.append(model_dir / "snapshots" / revision)
+        candidates.extend(sorted((model_dir / "snapshots").glob("*"), reverse=True))
+        for candidate in candidates:
+            if (candidate / "config.json").is_file() and any(candidate.glob("*.safetensors")):
+                print(f"Stage: using cached model snapshot {candidate}", flush=True)
+                return str(candidate)
+        return model_name
 
     def emit(kind, **payload):
         payload["kind"] = kind
@@ -580,13 +610,16 @@ try:
 
     def make_transcriber(runtime_name, model_name):
         print(f"Stage: runtime preflight profile={profile_id} runtime={runtime_name} model={model_name}", flush=True)
+        resolved_model_name = resolve_cached_model(model_name)
+        if resolved_model_name != model_name:
+            print(f"Stage: resolved model to local cache: {resolved_model_name}", flush=True)
         if runtime_name == "canary_mlx":
             try:
                 from canary_mlx import load_model
             except Exception as exc:
                 raise RuntimeError("Python package canary-mlx is required for runtime=canary_mlx. Install: python -m pip install canary-mlx") from exc
             print(f"Stage: load_model({model_name})", flush=True)
-            model_obj = load_model(model_name)
+            model_obj = load_model(resolved_model_name)
             print("Stage: model loaded", flush=True)
             def transcribe(path):
                 try:
@@ -604,7 +637,7 @@ try:
                 raise RuntimeError("Python package mlx-whisper is required for Whisper profiles. Install: python -m pip install mlx-whisper") from exc
             print("Stage: mlx_whisper ready", flush=True)
             def transcribe(path):
-                kwargs = {"path_or_hf_repo": model_name}
+                kwargs = {"path_or_hf_repo": resolved_model_name}
                 if language:
                     kwargs["language"] = language
                 try:
@@ -629,7 +662,7 @@ try:
             except Exception as exc:
                 raise RuntimeError("Python package mlx-audio is required for Parakeet/Canary v2/Voxtral profiles. Install: python -m pip install 'mlx-audio[stt]' or python -m pip install mlx-audio") from exc
             print(f"Stage: load_model({model_name}) via mlx-audio", flush=True)
-            model_obj = load_stt_model(model_name)
+            model_obj = load_stt_model(resolved_model_name)
             print("Stage: mlx-audio model loaded", flush=True)
 
             def transcribe(path):

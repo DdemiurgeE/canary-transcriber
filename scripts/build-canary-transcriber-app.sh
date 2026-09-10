@@ -6,7 +6,9 @@ cd "$ROOT"
 
 swift build --product canary-transcriber
 
-APP="$ROOT/dist/Canary Transcriber.app"
+FINAL_APP="$ROOT/dist/Canary Transcriber.app"
+STAGING_ROOT="${TMPDIR:-/tmp}/canary-transcriber-build"
+APP="$STAGING_ROOT/Canary Transcriber.app"
 BUILD_DIR="$ROOT/.build/arm64-apple-macosx/debug"
 BIN="$BUILD_DIR/canary-transcriber"
 if [[ ! -x "$BIN" ]]; then
@@ -23,7 +25,7 @@ if [[ ! -d "$SPARKLE_FRAMEWORK" ]]; then
   exit 1
 fi
 
-rm -rf "$APP"
+rm -rf "$APP" "$FINAL_APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -48,9 +50,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.7.8</string>
+    <string>0.7.9</string>
     <key>CFBundleVersion</key>
-    <string>17</string>
+    <string>18</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
@@ -108,4 +110,12 @@ fi
 cleanup_xattrs "$APP"
 codesign --verify --deep --verbose=2 "$APP"
 
-echo "Built: $APP"
+# The project lives under Documents/FileProvider, which can re-add provenance
+# metadata while codesign is running. Keep the signed source bundle outside
+# that location, then copy it back without extended attributes.
+mkdir -p "$(dirname "$FINAL_APP")"
+ditto --norsrc --noextattr "$APP" "$FINAL_APP"
+cleanup_xattrs "$FINAL_APP"
+codesign --verify --deep --verbose=2 "$FINAL_APP"
+
+echo "Built: $FINAL_APP"
