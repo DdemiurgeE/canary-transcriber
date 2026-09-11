@@ -23,6 +23,11 @@ public enum RuntimeInvocationBuilder {
         }
 
         switch runtime {
+        case "gigaam":
+            return RuntimeInvocation(
+                executable: "python",
+                arguments: ["-c", "import gigaam; print('gigaam runtime is available')"]
+            )
         case "mlx_audio_cli":
             var arguments = ["-m", "mlx_audio.stt.generate", "--model", model, "--audio", audioPath]
             if !language.isEmpty {

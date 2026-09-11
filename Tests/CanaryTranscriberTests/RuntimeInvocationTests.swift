@@ -27,4 +27,18 @@ final class RuntimeInvocationTests: XCTestCase {
             XCTAssertEqual(error as? RuntimeInvocationBuilder.Error, .unsupportedRuntime("unknown"))
         }
     }
+
+    func testGigaAMRuntimeIsSupported() throws {
+        let invocation = try RuntimeInvocationBuilder.make(
+            runtime: "gigaam",
+            model: "v3_e2e_rnnt",
+            audioPath: "/tmp/chunk.wav",
+            language: "ru"
+        )
+
+        XCTAssertEqual(invocation.executable, "python")
+        XCTAssertEqual(invocation.arguments, [
+            "-c", "import gigaam; print('gigaam runtime is available')"
+        ])
+    }
 }

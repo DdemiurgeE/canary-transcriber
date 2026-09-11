@@ -2,7 +2,7 @@
 
 A small native macOS SwiftUI app for batch transcription with local MLX speech-to-text profiles.
 
-The latest published release is **[v0.7.8](../../releases/tag/v0.7.8)**. It adds a resident MLX live worker, live transcript UI from capture start, and incremental `.canary.txt/.json/.md` export.
+The latest published release is **[v0.8.0](../../releases/tag/v0.8.0)**. It adds the Russian GigaAM v3 e2e RNNT transcription profile alongside the existing local MLX runtimes.
 
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 
@@ -26,6 +26,7 @@ The latest published release is **[v0.7.8](../../releases/tag/v0.7.8)**. It adds
   - `fast — Whisper Turbo`: `mlx-community/whisper-large-v3-turbo` via `mlx-whisper`.
   - `accurate — Whisper large-v3`: `mlx-community/whisper-large-v3-mlx` via `mlx-whisper`.
   - `multilingual European — Canary 1B v2`: `CogniSoftOrg/canary-1b-v2-mlx-bf16` via `mlx-audio`.
+  - `Russian — GigaAM v3 e2e RNNT`: `v3_e2e_rnnt` via the upstream GigaAM PyTorch runtime.
   - Russian transcription support for Canary v2 uses explicit `source_lang=ru` and `target_lang=ru` so the model transcribes Russian instead of translating to English.
   - `realtime — Voxtral Mini Realtime`: `mlx-community/Voxtral-Mini-4B-Realtime-2602-4bit` via `mlx-audio`.
 - Default language: `ru`.
@@ -54,10 +55,11 @@ The latest published release is **[v0.7.8](../../releases/tag/v0.7.8)**. It adds
 brew install ffmpeg
 python3 -m venv ~/venvs/canary-mlx
 ~/venvs/canary-mlx/bin/python -m pip install --upgrade pip
-~/venvs/canary-mlx/bin/python -m pip install canary-mlx mlx-whisper 'mlx-audio[stt]'
+~/venvs/canary-mlx/bin/python -m pip install canary-mlx mlx-whisper 'mlx-audio[stt]' hydra-core omegaconf soundfile sentencepiece
+~/venvs/canary-mlx/bin/python -m pip install --no-deps git+https://github.com/salute-developers/GigaAM.git
 ```
 
-If you only use the legacy `qfuxa/canary-mlx` runtime, `canary-mlx` is enough. Parakeet/Canary v2/Voxtral profiles need `mlx-audio`; Whisper profiles need `mlx-whisper`.
+If you only use the legacy `qfuxa/canary-mlx` runtime, `canary-mlx` is enough. Parakeet/Canary v2/Voxtral profiles need `mlx-audio`; Whisper profiles need `mlx-whisper`; GigaAM needs the additional packages shown above. GigaAM v3 e2e RNNT uses a 20-second chunk default because its short-file API accepts audio up to 25 seconds.
 
 The app defaults to this Python path:
 
@@ -100,6 +102,7 @@ If the DMG path is inconvenient, download `CanaryTranscriber.app.zip`, unzip it,
    - `fast — Whisper Turbo` for a fast Whisper-compatible path.
    - `accurate — Whisper large-v3` for quality-first transcription.
    - `multilingual European — Canary 1B v2` for Canary multilingual testing.
+   - `Russian — GigaAM v3 e2e RNNT` for Russian transcription with punctuation and normalization.
    - `realtime — Voxtral Mini Realtime` for the realtime-oriented Voxtral model in batch-file mode.
 5. Keep defaults unless needed:
    - `Model`: read-only value supplied by the selected profile.

@@ -112,6 +112,7 @@ public extension BatchConfig {
 
     private static let supportedRuntimes: Set<String> = [
         "canary_mlx",
+        "gigaam",
         "mlx_audio_cli",
         "mlx_whisper"
     ]
@@ -121,6 +122,7 @@ public extension BatchConfig {
         "fast-whisper-turbo": ["mlx_whisper"],
         "accurate-whisper-large-v3": ["mlx_whisper"],
         "multilingual-canary-v2": ["mlx_audio_cli"],
+        "russian-gigaam-v3": ["gigaam"],
         "realtime-voxtral-mini": ["mlx_audio_cli"]
     ]
 }

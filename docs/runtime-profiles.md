@@ -8,6 +8,7 @@ Canary Transcriber keeps profile selection read-only at model level. Choose `Pro
 | `fast-whisper-turbo` | `mlx_whisper` | `mlx-community/whisper-large-v3-turbo` | Fast Whisper-compatible STT |
 | `accurate-whisper-large-v3` | `mlx_whisper` | `mlx-community/whisper-large-v3-mlx` | Quality-first baseline |
 | `multilingual-canary-v2` | `mlx_audio_cli` | `CogniSoftOrg/canary-1b-v2-mlx-bf16` | Multilingual European STT |
+| `russian-gigaam-v3` | `gigaam` | `v3_e2e_rnnt` | Russian STT with punctuation and normalization |
 | `realtime-voxtral-mini` | `mlx_audio_cli` | `mlx-community/Voxtral-Mini-4B-Realtime-2602-4bit` | Realtime-oriented model in batch mode |
 
 ## Russian Canary v2
@@ -27,17 +28,20 @@ This keeps Russian as ASR target instead of silently using English defaults or t
 ~/venvs/canary-mlx/bin/python -c "import mlx_audio"
 ~/venvs/canary-mlx/bin/python -c "import mlx_whisper"
 ~/venvs/canary-mlx/bin/python -c "import canary_mlx"
+~/venvs/canary-mlx/bin/python -c "import gigaam"
 ```
 
 Install packages needed by selected profiles:
 
 ```bash
 ~/venvs/canary-mlx/bin/python -m pip install canary-mlx mlx-whisper 'mlx-audio[stt]' huggingface_hub
+~/venvs/canary-mlx/bin/python -m pip install hydra-core omegaconf soundfile sentencepiece
+~/venvs/canary-mlx/bin/python -m pip install --no-deps git+https://github.com/salute-developers/GigaAM.git
 ```
 
 ## Long recordings
 
-Input audio is normalized to 16 kHz mono WAV and processed in fixed chunks. Default chunk duration is 30 seconds with 2 seconds overlap. For Metal memory failures, use 15 or 10 seconds. Empty chunks are omitted; per-chunk details remain in `.canary.json`.
+Input audio is normalized to 16 kHz mono WAV and processed in fixed chunks. Default chunk duration is 30 seconds with 2 seconds overlap; the GigaAM profile uses 20 seconds because its short-file API limit is 25 seconds. For Metal memory failures, use 15 or 10 seconds. Empty chunks are omitted; per-chunk details remain in `.canary.json`.
 
 ## Outputs
 

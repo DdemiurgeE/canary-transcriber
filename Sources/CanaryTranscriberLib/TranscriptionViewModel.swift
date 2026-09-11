@@ -119,6 +119,15 @@ public final class TranscriptionViewModel: ObservableObject {
                 details: "Canary 1B v2 for 25 European languages; ASR/translation via mlx-audio."
             ),
             TranscriptionProfile(
+                id: "russian-gigaam-v3",
+                title: "Russian — GigaAM v3 e2e RNNT",
+                runtime: "gigaam",
+                model: "v3_e2e_rnnt",
+                language: "ru",
+                chunkDuration: "20",
+                details: "Russian end-to-end GigaAM v3 RNNT with punctuation and text normalization."
+            ),
+            TranscriptionProfile(
                 id: "realtime-voxtral-mini",
                 title: "realtime — Voxtral Mini Realtime",
                 runtime: "mlx_audio_cli",
@@ -657,6 +666,26 @@ try:
                 if isinstance(result, dict):
                     return str(result.get("text", ""))
                 return result.text if hasattr(result, "text") else str(result)
+            return transcribe
+
+        if runtime_name == "gigaam":
+            try:
+                import torch
+                import gigaam
+            except Exception as exc:
+                raise RuntimeError("Python package GigaAM is required. Install from https://github.com/salute-developers/GigaAM.git") from exc
+            device_name = "mps" if torch.backends.mps.is_available() else "cpu"
+            print(f"Stage: load_model({model_name}) via GigaAM on {device_name}", flush=True)
+            model_obj = gigaam.load_model(model_name, device=device_name)
+            print("Stage: GigaAM model loaded", flush=True)
+
+            def transcribe(path):
+                try:
+                    result = model_obj.transcribe(str(path), word_timestamps=timestamps)
+                    return result.text if hasattr(result, "text") else str(result)
+                finally:
+                    if device_name == "mps":
+                        torch.mps.empty_cache()
             return transcribe
 
         if runtime_name == "mlx_audio_cli":
@@ -1356,6 +1385,8 @@ Persistent log: \(persistentLogPath())
                 switch runtime {
                 case "mlx_audio_cli":
                     importCheck = "import mlx_audio"
+                case "gigaam":
+                    importCheck = "import gigaam"
                 case "mlx_whisper":
                     importCheck = "import mlx_whisper"
                 case "canary_mlx":
@@ -1386,6 +1417,7 @@ Persistent log: \(persistentLogPath())
 
     func checkModelCache() {
         let modelID = model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? selectedProfile.model : model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let runtime = self.runtime
         guard !modelID.isEmpty else { return }
 
         let py = pythonPath
@@ -1398,6 +1430,19 @@ Persistent log: \(persistentLogPath())
 from pathlib import Path
 import sys
 model_id = sys.argv[1]
+runtime = sys.argv[2]
+if runtime == "gigaam":
+    cache_dir = Path.home() / ".cache" / "gigaam"
+    checkpoint = cache_dir / (model_id + ".ckpt")
+    tokenizer = cache_dir / (model_id + "_tokenizer.model")
+    if checkpoint.is_file() and checkpoint.stat().st_size > 1024:
+        if "e2e" not in model_id or tokenizer.is_file():
+            print("CACHED")
+        else:
+            print("ABSENT")
+    else:
+        print("ABSENT")
+    sys.exit(0)
 cache = Path.home() / ".cache" / "huggingface" / "hub"
 model_dir = cache / ("models--" + model_id.replace("/", "--"))
 if not model_dir.exists():
@@ -1419,7 +1464,7 @@ try:
         print("UPDATABLE")
 except Exception:
     print("CACHED")
-""", modelID]
+""", modelID, runtime]
         task.standardOutput = pipe
         task.standardError = FileHandle.nullDevice
         do {
@@ -1506,7 +1551,7 @@ except Exception:
                 let venvPython = venvDir + "/bin/python"
 
                 // Install packages
-                let packages = ["mlx-audio[stt]", "mlx-whisper", "canary-mlx", "huggingface_hub"]
+                let packages = ["mlx-audio[stt]", "mlx-whisper", "canary-mlx", "huggingface_hub", "hydra-core==1.3.*", "omegaconf==2.3.*", "soundfile", "sentencepiece"]
                 let installTask = Process()
                 let installPipe = Pipe()
                 installTask.executableURL = URL(fileURLWithPath: venvPython)
@@ -1518,15 +1563,29 @@ except Exception:
                 try installTask.run()
                 installTask.waitUntilExit()
                 let pipOutput = String(data: installPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                var gigaamInstallStatus: Int32 = installTask.terminationStatus
+                var gigaamOutput = ""
+                if gigaamInstallStatus == 0 {
+                    let gigaamTask = Process()
+                    let gigaamPipe = Pipe()
+                    gigaamTask.executableURL = URL(fileURLWithPath: venvPython)
+                    gigaamTask.arguments = ["-m", "pip", "install", "--quiet", "--no-deps", "git+https://github.com/salute-developers/GigaAM.git"]
+                    gigaamTask.standardOutput = gigaamPipe
+                    gigaamTask.standardError = gigaamPipe
+                    try gigaamTask.run()
+                    gigaamTask.waitUntilExit()
+                    gigaamInstallStatus = gigaamTask.terminationStatus
+                    gigaamOutput = String(data: gigaamPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                }
 
                 DispatchQueue.main.async {
-                    if installTask.terminationStatus == 0 {
+                    if installTask.terminationStatus == 0 && gigaamInstallStatus == 0 {
                         self.pythonPath = venvPython
                         self.pythonStatus = .present
                         self.logs += "✅ Venv created and packages installed: \(venvPython)\n"
                     } else {
-                        self.logs += pipOutput + "\n"
-                        self.logs += "❌ pip install failed. Install packages manually:\n   \(venvPython) -m pip install mlx-audio mlx-whisper canary-mlx huggingface-hub\n"
+                        self.logs += pipOutput + gigaamOutput + "\n"
+                        self.logs += "❌ pip install failed. Install packages manually:\n   \(venvPython) -m pip install mlx-audio mlx-whisper canary-mlx huggingface-hub hydra-core omegaconf soundfile sentencepiece\n   \(venvPython) -m pip install --no-deps git+https://github.com/salute-developers/GigaAM.git\n"
                     }
                     self.isSettingUpPython = false
                 }
@@ -1543,8 +1602,8 @@ except Exception:
         guard !isDownloadingModel, !modelID.isEmpty else { return }
         isDownloadingModel = true
         modelDownloadStatus[modelID] = .downloading
-        logs += "Stage: downloading model \(modelID) via huggingface_hub...\n"
-        appendPersistentLog("Stage: downloading model \(modelID) via huggingface_hub...\n")
+        logs += "Stage: downloading model \(modelID)...\n"
+        appendPersistentLog("Stage: downloading model \(modelID)...\n")
 
         let py = pythonPath
         guard FileManager.default.isExecutableFile(atPath: py) else {
@@ -1560,9 +1619,14 @@ except Exception:
             task.arguments = ["-c", """
 import sys
 try:
-    from huggingface_hub import snapshot_download
     print("Stage: downloading " + \(modelID.debugDescription) + " to HuggingFace cache...", flush=True)
-    snapshot_download(\(modelID.debugDescription), resume_download=True, local_files_only=False)
+    model_id = \(modelID.debugDescription)
+    if model_id.startswith(("v1_", "v2_", "v3_", "multilingual_")) or model_id in ("emo", "ctc", "rnnt", "e2e_ctc", "e2e_rnnt", "ssl"):
+        import gigaam
+        gigaam.load_model(model_id, device="cpu")
+    else:
+        from huggingface_hub import snapshot_download
+        snapshot_download(model_id, resume_download=True, local_files_only=False)
     print("DONE", flush=True)
 except KeyboardInterrupt:
     print("INTERRUPTED", flush=True)

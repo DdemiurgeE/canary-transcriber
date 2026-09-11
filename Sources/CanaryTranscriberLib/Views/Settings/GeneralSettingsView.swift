@@ -40,6 +40,7 @@ struct GeneralSettingsView: View {
                         Text("mlx-audio CLI").tag("mlx_audio_cli")
                         Text("mlx-whisper").tag("mlx_whisper")
                         Text("canary-mlx legacy").tag("canary_mlx")
+                        Text("GigaAM").tag("gigaam")
                     }
                     .frame(width: 220)
 
