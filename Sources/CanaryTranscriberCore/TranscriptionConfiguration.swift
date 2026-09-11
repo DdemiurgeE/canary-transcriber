@@ -14,6 +14,7 @@ public extension BatchConfig {
         case emptyModel
         case unsupportedRuntime
         case unsupportedProfileRuntime
+        case outputCollision(String)
 
         public var errorDescription: String? {
             switch self {
@@ -41,6 +42,8 @@ public extension BatchConfig {
                 return "Runtime is not supported."
             case .unsupportedProfileRuntime:
                 return "The selected profile is not supported by the selected runtime."
+            case .outputCollision(let path):
+                return "Multiple input files would overwrite the same output: \(path). Rename the inputs or choose separate output folders."
             }
         }
     }
@@ -83,7 +86,28 @@ public extension BatchConfig {
             guard speakerCount > 0 else { throw ValidationError.invalidSpeakerCount }
         }
 
+        try validateOutputDestinations()
         return self
+    }
+
+    private func validateOutputDestinations() throws {
+        var destinations = Set<String>()
+        for file in files {
+            let paths = TranscriptionOutputPaths(
+                sourceURL: URL(fileURLWithPath: (file as NSString).expandingTildeInPath),
+                outputDirectory: outputDir.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) },
+                writeNextToSource: writeNextToSource,
+                markdownDirectory: markdownOutputDir.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            )
+            for url in [paths.text, paths.json, paths.markdown] {
+                // Conservative on case-sensitive volumes; safe on default macOS APFS.
+                let key = url.resolvingSymlinksInPath().standardizedFileURL.path
+                    .precomposedStringWithCanonicalMapping.lowercased()
+                guard destinations.insert(key).inserted else {
+                    throw ValidationError.outputCollision(url.path)
+                }
+            }
+        }
     }
 
     private static let supportedRuntimes: Set<String> = [

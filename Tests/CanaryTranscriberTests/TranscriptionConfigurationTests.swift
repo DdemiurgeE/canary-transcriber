@@ -27,6 +27,10 @@ final class TranscriptionConfigurationTests: XCTestCase {
         )
     }
 
+    func testCollidingOutputNamesAreRejectedBeforeRunning() {
+        XCTAssertThrowsError(try makeConfig(files: ["/tmp/a/meeting.wav", "/tmp/b/meeting.wav"]).validated())
+    }
+
     func testValidConfigurationPassesValidation() throws {
         XCTAssertNoThrow(try makeConfig().validated())
     }

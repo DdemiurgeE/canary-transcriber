@@ -50,13 +50,16 @@ public struct LiveCaptureConfig: Codable, Equatable, Sendable {
         }
     }
 
+    /// Shared by preflight, UI and the resident worker.
+    public static func supports(runtime: String) -> Bool { runtime == "mlx_audio_cli" }
+
     public func validated() throws -> LiveCaptureConfig {
         guard windowDuration.isFinite, windowDuration > 0 else { throw ValidationError.invalidWindowDuration }
         guard overlapDuration.isFinite, overlapDuration >= 0, overlapDuration < windowDuration else {
             throw ValidationError.invalidOverlapDuration
         }
         guard !profileID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ValidationError.emptyProfile }
-        guard ["canary_mlx", "mlx_audio_cli", "mlx_whisper"].contains(runtime) else {
+        guard Self.supports(runtime: runtime) else {
             throw ValidationError.unsupportedRuntime(runtime)
         }
         guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw ValidationError.emptyModel }

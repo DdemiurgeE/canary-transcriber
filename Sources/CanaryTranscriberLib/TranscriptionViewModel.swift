@@ -918,6 +918,7 @@ try:
                 mx.clear_cache()
             except Exception:
                 pass
+            ffmpeg = resolve_ffmpeg()
             retry_text = []
             for retry_index, (retry_start, retry_end) in enumerate(((start, midpoint), (midpoint, end))):
                 retry_path = Path(work_dir) / f"{label}_retry_{retry_index:02d}.wav"

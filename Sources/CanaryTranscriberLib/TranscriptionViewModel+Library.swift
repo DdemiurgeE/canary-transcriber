@@ -165,7 +165,7 @@ extension TranscriptionViewModel {
             rewriteJSONAlias(alias: alias, speaker: speaker, at: jsonPath)
         }
         if let markdownPath = session.markdownPath {
-            rewriteMarkdownAlias(session: session, transcript: transcript, at: markdownPath)
+            rewriteMarkdownAlias(session: session, alias: alias, speaker: speaker, at: markdownPath)
         }
     }
 
@@ -186,16 +186,17 @@ extension TranscriptionViewModel {
         try? newData.write(to: URL(fileURLWithPath: path))
     }
 
-    private func rewriteMarkdownAlias(session: SessionRecord, transcript: SessionTranscript, at path: String) {
+    private func rewriteMarkdownAlias(session: SessionRecord, alias: String, speaker: String, at path: String) {
         let existing = (try? String(contentsOfFile: path, encoding: .utf8)) ?? ""
-        let frontMatter = Self.frontMatterBlock(of: existing)
-        let segments = transcript.displaySegments.compactMap { segment -> SpeakerSegment? in
-            guard let speaker = segment.speaker else { return nil }
-            return SpeakerSegment(speaker: speaker, start: segment.start, end: segment.end, text: segment.text)
-        }
-        let sourceName = URL(fileURLWithPath: session.sourceAudioPath).lastPathComponent
-        let body = MeetingWorkspace(sourceName: sourceName, segments: segments, aliases: parsedSpeakerAliases(), fallbackText: transcript.text).render()
-        try? (frontMatter + body).write(toFile: path, atomically: true, encoding: .utf8)
+        // Safe, targeted patch: rewrites only generated speaker labels so user notes and
+        // hand edits in an already-written .canary.md survive the rename.
+        let patched = CanaryTranscriberCore.SessionMarkdownEditing.renamingSpeaker(
+            in: existing,
+            speaker: speaker,
+            alias: alias
+        )
+        guard patched != existing else { return }
+        try? patched.write(toFile: path, atomically: true, encoding: .utf8)
     }
 
     /// The YAML front matter block (including both `---` delimiters) at the top of a
