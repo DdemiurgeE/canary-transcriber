@@ -193,6 +193,10 @@ public final class TranscriptionViewModel: ObservableObject {
             logs += "⚠️ Select an application first.\n"
             return
         }
+        guard !appAudioCapture.isRecording, !appAudioCapture.isFinishing else {
+            logs += "⚠️ App audio capture is still finishing. Wait until the current recording is saved.\n"
+            return
+        }
         let captureDir = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Documents/CanaryTranscripts/AppAudioCaptures", isDirectory: true)
         captureMicrophone = withMic

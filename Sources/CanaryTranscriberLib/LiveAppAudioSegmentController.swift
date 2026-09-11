@@ -84,6 +84,12 @@ final class LiveAppAudioSegmentController: NSObject, ObservableObject, SCStreamO
     private var microphoneFormat: AVAudioFormat?
     private var microphoneFrames: AVAudioFramePosition = 0
     private var microphoneLock = NSLock()
+    /// Number of segment writers whose finish callback has not delivered its segment yet.
+    /// Stop must not notify the ViewModel until this reaches zero; otherwise a late rotated
+    /// segment can be submitted to a worker that has already been reset for the next recording.
+    private var pendingSegmentFinishes = 0
+    private var stopRequested = false
+    private var stopResult: Result<Void, Error> = .success(())
 
     func start(
         target: CaptureAppTarget,
@@ -98,6 +104,9 @@ final class LiveAppAudioSegmentController: NSObject, ObservableObject, SCStreamO
         guard !isCapturing, !isFinishing else { return }
         let generation = UUID()
         sessionID = generation
+        pendingSegmentFinishes = 0
+        stopRequested = false
+        stopResult = .success(())
         self.target = target
         self.outputDirectory = outputDirectory
         self.segmentDuration = max(1, segmentDuration)
@@ -161,6 +170,7 @@ final class LiveAppAudioSegmentController: NSObject, ObservableObject, SCStreamO
         guard isCapturing || stream != nil || writer != nil else { return }
         isCapturing = false
         isFinishing = true
+        stopRequested = true
         onLog?("Stopping live capture and closing the final segment...\n")
         let streamToStop = stream
         Task {
@@ -212,6 +222,7 @@ final class LiveAppAudioSegmentController: NSObject, ObservableObject, SCStreamO
         if includeMicrophone, let outputDirectory {
             try? openMicrophoneSegment(outputDirectory: outputDirectory)
         }
+        pendingSegmentFinishes += 1
         current.finish { [weak self] result in
             guard let self else { return }
             switch result {
@@ -221,12 +232,17 @@ final class LiveAppAudioSegmentController: NSObject, ObservableObject, SCStreamO
             case .failure(let error):
                 self.onLog?("Live segment rejected: \(error.localizedDescription)\n")
             }
+            self.sampleQueue.async {
+                self.pendingSegmentFinishes = max(0, self.pendingSegmentFinishes - 1)
+                self.finishIfReady()
+            }
         }
     }
 
     private func finishCurrentSegmentAndStop() {
         guard let current = writer else {
-            finish(.success(()))
+            stopResult = .success(())
+            finishIfReady()
             return
         }
         writer = nil
@@ -239,13 +255,30 @@ final class LiveAppAudioSegmentController: NSObject, ObservableObject, SCStreamO
         } else {
             duration = segmentDuration
         }
+        segmentStart = nil
+        pendingSegmentFinishes += 1
         current.finish { [weak self] result in
             guard let self else { return }
             if case .success(let url) = result {
                 self.mixIfNeeded(appURL: url, microphoneURL: microphoneURL, index: index, duration: duration)
+            } else if case .failure(let error) = result {
+                self.stopResult = .failure(error)
             }
-            self.finish(result.map { _ in () })
+            self.sampleQueue.async {
+                self.pendingSegmentFinishes = max(0, self.pendingSegmentFinishes - 1)
+                if case .success = result, case .success = self.stopResult {
+                    self.stopResult = .success(())
+                }
+                self.finishIfReady()
+            }
         }
+    }
+
+    /// Called only on sampleQueue. This is the single point that releases the ViewModel after
+    /// stop, and therefore cannot race a rotated segment's finish callback.
+    private func finishIfReady() {
+        guard stopRequested, pendingSegmentFinishes == 0 else { return }
+        finish(stopResult)
     }
 
     private func startMicrophone(outputDirectory: URL) throws {
