@@ -2,7 +2,7 @@
 
 A small native macOS SwiftUI app for batch transcription with local MLX speech-to-text profiles.
 
-The latest published release is **[v0.8.0](../../releases/tag/v0.8.0)**. It adds the Russian GigaAM v3 e2e RNNT transcription profile alongside the existing local MLX runtimes.
+The latest published release is **[v0.8.1](../../releases/tag/v0.8.1)**. It adds a quiet GigaAM runtime by filtering its harmless PyTorch MPS STFT warning.
 
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 

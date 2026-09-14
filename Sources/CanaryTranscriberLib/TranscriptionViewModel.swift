@@ -472,6 +472,7 @@ public final class TranscriptionViewModel: ObservableObject {
         runPython(configURL: configURL, pythonPath: cleanPython, config: config)
     }
 
+    // swiftlint:disable function_body_length
     func runPython(configURL: URL, pythonPath: String, config: BatchConfig) {
         let script = #"""
 import json
@@ -681,7 +682,16 @@ try:
 
             def transcribe(path):
                 try:
-                    result = model_obj.transcribe(str(path), word_timestamps=timestamps)
+                    import warnings
+                    with warnings.catch_warnings():
+                        # PyTorch 2.12/MPS emits this harmless internal STFT
+                        # resize warning from GigaAM's MelSpectrogram path.
+                        warnings.filterwarnings(
+                            "ignore",
+                            message=r"An output with one or more elements was resized since it had shape .*, which does not match the required output shape.*",
+                            category=UserWarning,
+                        )
+                        result = model_obj.transcribe(str(path), word_timestamps=timestamps)
                     return result.text if hasattr(result, "text") else str(result)
                 finally:
                     if device_name == "mps":
@@ -1176,6 +1186,7 @@ Persistent log: \(persistentLogPath())
         }
     }
 
+    // swiftlint:enable function_body_length
     func stopBatch() {
         guard let processTask else { return }
         logs += "\nStopping PID: \(processTask.processIdentifier)...\n"
