@@ -559,9 +559,11 @@ try:
         base_dir = audio_path.parent if write_next_to_source else output_dir
         base_dir.mkdir(parents=True, exist_ok=True)
         stem = audio_path.stem
+        date_prefix = datetime.now().strftime("%Y-%m-%d")
+        dated_stem = f"{date_prefix}-{stem}"
         md_dir = markdown_output_dir if markdown_output_dir is not None else base_dir
         md_dir.mkdir(parents=True, exist_ok=True)
-        return base_dir / f"{stem}.canary.txt", base_dir / f"{stem}.canary.json", md_dir / f"{stem}.canary.md"
+        return base_dir / f"{dated_stem}.canary.txt", base_dir / f"{dated_stem}.canary.json", md_dir / f"{dated_stem}.canary.md"
 
     def resolve_ffmpeg():
         candidates = [

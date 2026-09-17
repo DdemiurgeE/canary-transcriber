@@ -134,10 +134,15 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
 
             try FileManager.default.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
             let safeName = target.name.replacingOccurrences(of: "[^A-Za-z0-9А-Яа-я._-]+", with: "-", options: .regularExpression)
+            let dateFormatter = DateFormatter()
+            dateFormatter.calendar = Calendar(identifier: .gregorian)
+            dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+            dateFormatter.dateFormat = "yyyy-MM-dd"
+            let datePrefix = dateFormatter.string(from: Date())
             let stamp = Int(Date().timeIntervalSince1970)
-            let appURL = outputDirectory.appendingPathComponent("app-audio-\(safeName)-\(stamp).m4a")
-            let micURL = outputDirectory.appendingPathComponent("mic-audio-\(safeName)-\(stamp).caf")
-            let mixedURL = outputDirectory.appendingPathComponent("conference-audio-\(safeName)-\(stamp).m4a")
+            let appURL = outputDirectory.appendingPathComponent("\(datePrefix)-app-audio-\(safeName)-\(stamp).m4a")
+            let micURL = outputDirectory.appendingPathComponent("\(datePrefix)-mic-audio-\(safeName)-\(stamp).caf")
+            let mixedURL = outputDirectory.appendingPathComponent("\(datePrefix)-conference-audio-\(safeName)-\(stamp).m4a")
             appOutputURL = appURL
             microphoneOutputURL = includeMicrophone ? micURL : nil
             mixedOutputURL = includeMicrophone ? mixedURL : appURL

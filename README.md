@@ -2,7 +2,7 @@
 
 A small native macOS SwiftUI app for batch transcription with local MLX speech-to-text profiles.
 
-The latest published release is **[v0.8.1](../../releases/tag/v0.8.1)**. It adds a quiet GigaAM runtime by filtering its harmless PyTorch MPS STFT warning.
+The latest published release is **[v0.8.2](../../releases/tag/v0.8.2)**. It adds date-prefixed transcription and capture output filenames.
 
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 
@@ -33,9 +33,9 @@ The latest published release is **[v0.8.1](../../releases/tag/v0.8.1)**. It adds
 - Normalizes input with `ffmpeg` to 16 kHz mono PCM WAV.
 - Manual fixed-size chunking for long recordings to avoid empty output and MLX/Metal memory issues.
 - Writes outputs next to the source file or into a selected output folder:
-  - `<source>.canary.txt`
-  - `<source>.canary.json`
-  - `<source>.canary.md` (structured meeting workspace when diarization is enabled)
+  - `YYYY-MM-DD-<source>.canary.txt`
+  - `YYYY-MM-DD-<source>.canary.json`
+  - `YYYY-MM-DD-<source>.canary.md` (structured meeting workspace when diarization is enabled)
 - When diarization is enabled, Settings also accepts optional speaker aliases like `SPEAKER_00 = Alice` and stores them locally so they reappear on the next launch.
 - Optional pyannote diarization reports progress, validates segments, and falls back to speakerless transcription when short or unusable audio produces no segments.
 - Keeps a persistent troubleshooting log:

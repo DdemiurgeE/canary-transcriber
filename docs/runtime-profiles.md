@@ -45,4 +45,4 @@ Input audio is normalized to 16 kHz mono WAV and processed in fixed chunks. Defa
 
 ## Outputs
 
-Each source produces `.canary.txt`, `.canary.json`, and `.canary.md`. JSON preserves profile/runtime/model/language, chunk records, errors, and optional diarization data. Markdown becomes a meeting workspace when usable speaker segments exist.
+Each source produces date-prefixed `YYYY-MM-DD-<source>.canary.txt`, `.canary.json`, and `.canary.md` files. JSON preserves profile/runtime/model/language, chunk records, errors, and optional diarization data. Markdown becomes a meeting workspace when usable speaker segments exist.
