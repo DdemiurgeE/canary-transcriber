@@ -2,7 +2,7 @@
 
 A small native macOS SwiftUI app for batch transcription with local MLX speech-to-text profiles.
 
-The latest published release is **[v0.8.3](../../releases/tag/v0.8.3)**. It fixes release bundling so date-prefixed output support is included in the installed app.
+The latest published release is **[v0.8.4](../../releases/tag/v0.8.4)**. It prevents duplicate date prefixes when transcribing date-prefixed capture files.
 
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 
