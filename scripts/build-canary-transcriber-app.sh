@@ -4,17 +4,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-swift build --product canary-transcriber
-
 FINAL_APP="$ROOT/dist/Canary Transcriber.app"
 STAGING_ROOT="${TMPDIR:-/tmp}/canary-transcriber-build"
 APP="$STAGING_ROOT/Canary Transcriber.app"
-BUILD_DIR="$ROOT/.build/arm64-apple-macosx/debug"
+SWIFT_BUILD_ROOT="${TMPDIR:-/tmp}/canary-transcriber-swift-build"
+rm -rf "$SWIFT_BUILD_ROOT"
+swift build --scratch-path "$SWIFT_BUILD_ROOT" --product canary-transcriber
+BUILD_DIR="$(swift build --scratch-path "$SWIFT_BUILD_ROOT" --show-bin-path)"
 BIN="$BUILD_DIR/canary-transcriber"
-if [[ ! -x "$BIN" ]]; then
-  BUILD_DIR="$ROOT/.build/debug"
-  BIN="$BUILD_DIR/canary-transcriber"
-fi
 if [[ ! -x "$BIN" ]]; then
   echo "Cannot find built canary-transcriber binary" >&2
   exit 1
@@ -50,9 +47,9 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.8.2</string>
+    <string>0.8.3</string>
     <key>CFBundleVersion</key>
-    <string>23</string>
+    <string>24</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
