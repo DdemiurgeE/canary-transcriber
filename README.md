@@ -2,7 +2,7 @@
 
 A small native macOS SwiftUI app for batch transcription with local MLX speech-to-text profiles.
 
-The latest published release is **[v0.8.5](../../releases/tag/v0.8.5)**. It allows recording a new app-audio session while the previous batch is being transcribed or diarized.
+The latest published release is **[v0.8.6](../../releases/tag/v0.8.6)**. It embeds the recording drawer in the Library and builds installers from an isolated temporary staging directory.
 
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 

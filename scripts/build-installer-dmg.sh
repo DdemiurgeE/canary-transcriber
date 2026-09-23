@@ -5,14 +5,18 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 APP="$ROOT/dist/Canary Transcriber.app"
-DMG_DIR="$ROOT/dist/dmg-staging"
 DMG="$ROOT/dist/CanaryTranscriber.dmg"
 ZIP="$ROOT/dist/CanaryTranscriber.app.zip"
 VOLNAME="Canary Transcriber"
+BUILD_ROOT="${TMPDIR:-/tmp}/canary-transcriber-installer"
+DMG_DIR="$BUILD_ROOT/dmg-staging"
+DMG_WORK="$BUILD_ROOT/CanaryTranscriber.dmg"
+ZIP_DIR="$BUILD_ROOT/zip-staging"
+ZIP_WORK="$BUILD_ROOT/CanaryTranscriber.app.zip"
 
 "$ROOT/scripts/build-canary-transcriber-app.sh"
 
-rm -rf "$DMG_DIR" "$DMG" "$ZIP" "$ZIP.sha256"
+rm -rf "$BUILD_ROOT" "$DMG" "$DMG.sha256" "$ZIP" "$ZIP.sha256"
 mkdir -p "$DMG_DIR"
 # Copy without resource forks / extended attributes so codesign strict verification
 # remains valid after the app is placed inside the read-only DMG.
@@ -27,21 +31,21 @@ hdiutil create \
   -volname "$VOLNAME" \
   -srcfolder "$DMG_DIR" \
   -ov \
-  -fs HFS+ \
+  -fs APFS \
   -format UDZO \
-  "$DMG"
+  "$DMG_WORK"
 
-hdiutil imageinfo "$DMG" >/dev/null
+hdiutil imageinfo "$DMG_WORK" >/dev/null
+ditto --norsrc --noextattr "$DMG_WORK" "$DMG"
 shasum -a 256 "$DMG" > "$DMG.sha256"
 
 # Also produce a plain zipped .app as a fallback for users who prefer not to use DMG.
-ZIP_DIR="$ROOT/dist/zip-staging"
-rm -rf "$ZIP_DIR"
 mkdir -p "$ZIP_DIR"
 ditto --norsrc --noextattr "$APP" "$ZIP_DIR/Canary Transcriber.app"
-(cd "$ZIP_DIR" && zip -qry "$ZIP" "Canary Transcriber.app")
+(cd "$ZIP_DIR" && zip -qry "$ZIP_WORK" "Canary Transcriber.app")
+ditto --norsrc --noextattr "$ZIP_WORK" "$ZIP"
 shasum -a 256 "$ZIP" > "$ZIP.sha256"
-rm -rf "$ZIP_DIR"
+rm -rf "$BUILD_ROOT"
 
 rm -rf "$DMG_DIR"
 
