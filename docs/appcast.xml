@@ -6,6 +6,14 @@
         <description>Most recent changes for Canary Transcriber.</description>
         <language>en</language>
         <item>
+            <title>Version 0.8.5</title>
+            <pubDate>Wed, 23 Sep 2026 12:30:53 +0000</pubDate>
+            <sparkle:version>26</sparkle:version>
+            <sparkle:shortVersionString>0.8.5</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/DdemiurgeE/canary-transcriber/releases/download/v0.8.5/CanaryTranscriber.app.zip" type="application/octet-stream" sparkle:edSignature="qtDqJuW7rnb7uxR9UAsuPja9bOSioBSSASzxc4jJXTQQln+zWvB4gn8FNXCjmVZanHkW9M9ppcjDOjsfV9ZdCw==" length="2811919" />
+        </item>
+        <item>
             <title>Version 0.8.4</title>
             <pubDate>Mon, 21 Sep 2026 12:03:46 +0000</pubDate>
             <sparkle:version>25</sparkle:version>
