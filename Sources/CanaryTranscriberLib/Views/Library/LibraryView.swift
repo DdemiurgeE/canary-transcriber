@@ -6,6 +6,7 @@ struct LibraryView: View {
     @ObservedObject var viewModel: TranscriptionViewModel
     @State private var searchText = ""
     @State private var showingNewRecording = false
+    @State private var isRecordingPanelExpanded = true
     @State private var showingDiarizationSettings = false
     @State private var selectedIDs: Set<SessionRecord.ID> = []
     @State private var showingLogs = false
@@ -63,14 +64,12 @@ struct LibraryView: View {
                         Button("Add files") { viewModel.chooseAudioFiles() }
                         Button {
                             showingNewRecording = true
+                            isRecordingPanelExpanded = true
                         } label: {
                             Label("New Recording", systemImage: "plus.circle.fill")
                         }
                     }
                 }
-        }
-        .sheet(isPresented: $showingNewRecording) {
-            NewRecordingSheet(viewModel: viewModel, isPresented: $showingNewRecording)
         }
         .frame(minWidth: 1000, idealWidth: 1080, maxWidth: .infinity, minHeight: 720, idealHeight: 820, maxHeight: .infinity)
         .onAppear {
@@ -133,6 +132,15 @@ struct LibraryView: View {
 
             if showingLogs {
                 ResizableLogPanel(height: $logsPanelHeight, text: viewModel.logs.isEmpty ? "No log yet." : viewModel.logs)
+            }
+
+            if showingNewRecording {
+                NewRecordingSheet(
+                    viewModel: viewModel,
+                    isPresented: $showingNewRecording,
+                    isExpanded: $isRecordingPanelExpanded
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
             actionBar
