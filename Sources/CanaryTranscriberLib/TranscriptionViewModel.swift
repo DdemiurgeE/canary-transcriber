@@ -57,6 +57,22 @@ public final class TranscriptionViewModel: ObservableObject {
     private let batchResultAccumulator = BatchResultAccumulator()
     @Published var isFileDropTargeted = false
 
+    var captureSourceControlsDisabled: Bool {
+        CaptureConcurrencyPolicy.captureControlsDisabled(
+            isBatchRunning: isRunning,
+            isCaptureRecording: appAudioCapture.isRecording,
+            isCaptureFinishing: appAudioCapture.isFinishing
+        )
+    }
+
+    var canStartAppAudioCapture: Bool {
+        !captureSourceControlsDisabled && selectedCaptureApp != nil
+    }
+
+    var isRecordingWhileBatchTranscribing: Bool {
+        isRunning && (appAudioCapture.isRecording || appAudioCapture.isFinishing)
+    }
+
     @Published var appAudioCapture = AppAudioCaptureController()
     @Published var captureApps: [CaptureAppTarget] = []
     @Published var selectedCaptureAppID: CaptureAppTarget.ID?
@@ -211,6 +227,9 @@ public final class TranscriptionViewModel: ObservableObject {
         captureMicrophone = withMic
         let micLabel = captureMicrophone ? (selectedMicrophone?.title ?? "system default") : "off"
         logs += "Stage: start app audio capture for \(target.title); microphone=\(micLabel)\n"
+        if isRunning {
+            logs += "Stage: capture runs concurrently with the active transcription batch; the recorded file will be queued after Stop.\n"
+        }
         Task {
             await appAudioCapture.start(target: target, includeMicrophone: captureMicrophone, microphoneDeviceID: selectedMicrophoneID, outputDirectory: captureDir, onLog: { text in
                 DispatchQueue.main.async {
@@ -263,11 +282,6 @@ public final class TranscriptionViewModel: ObservableObject {
     }
 
     func handleFileDrop(providers: [NSItemProvider]) -> Bool {
-        guard !isRunning else {
-            logs += "⚠️ Cannot add files during transcription.\n"
-            return false
-        }
-
         let fileURLType = UTType.fileURL.identifier
         let matchingProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(fileURLType) }
         guard !matchingProviders.isEmpty else { return false }

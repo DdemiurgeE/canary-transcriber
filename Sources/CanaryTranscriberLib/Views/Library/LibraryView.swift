@@ -61,7 +61,6 @@ struct LibraryView: View {
                             }
                         }
                         Button("Add files") { viewModel.chooseAudioFiles() }
-                            .disabled(viewModel.isRunning)
                         Button {
                             showingNewRecording = true
                         } label: {

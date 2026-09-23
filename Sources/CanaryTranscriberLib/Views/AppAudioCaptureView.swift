@@ -6,6 +6,12 @@ struct AppAudioCaptureView: View {
     var body: some View {
         GroupBox("App Audio Capture — ScreenCaptureKit") {
             VStack(alignment: .leading, spacing: 8) {
+                if viewModel.isRecordingWhileBatchTranscribing {
+                    Label("Recording while the previous batch is transcribed", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
                 HStack(spacing: 8) {
                     Picker("Application", selection: $viewModel.selectedCaptureAppID) {
                         Text(viewModel.captureApps.isEmpty ? "Press Refresh apps" : "Select an application").tag(Optional<CaptureAppTarget.ID>.none)
@@ -15,10 +21,10 @@ struct AppAudioCaptureView: View {
                     }
                     .labelsHidden()
                     .frame(maxWidth: 400)
-                    .disabled(viewModel.appAudioCapture.isRecording || viewModel.isRunning)
+                    .disabled(viewModel.captureSourceControlsDisabled)
 
                     Button(viewModel.isRefreshingCaptureApps ? "Refreshing..." : "Refresh apps") { viewModel.refreshCaptureApps() }
-                        .disabled(viewModel.isRefreshingCaptureApps || viewModel.appAudioCapture.isRecording || viewModel.isRunning)
+                        .disabled(viewModel.isRefreshingCaptureApps || viewModel.captureSourceControlsDisabled)
 
                     Spacer()
 
@@ -28,14 +34,14 @@ struct AppAudioCaptureView: View {
                                 .font(.title)
                         }
                         .help("Record app audio only (no microphone)")
-                        .disabled(viewModel.appAudioCapture.isRecording || viewModel.isRunning || viewModel.selectedCaptureApp == nil)
+                        .disabled(!viewModel.canStartAppAudioCapture)
 
                         Button(action: { viewModel.startAppAudioCapture(withMic: true) }) {
                             Image(systemName: "waveform.badge.mic")
                                 .font(.title)
                         }
                         .help("Record app audio + microphone")
-                        .disabled(viewModel.appAudioCapture.isRecording || viewModel.isRunning || viewModel.selectedCaptureApp == nil)
+                        .disabled(!viewModel.canStartAppAudioCapture)
 
                         Button(action: { viewModel.stopAppAudioCapture() }) {
                             Image(systemName: "stop.fill")
@@ -70,10 +76,10 @@ struct AppAudioCaptureView: View {
                         }
                     }
                     .frame(maxWidth: 360)
-                    .disabled(!viewModel.captureMicrophone || viewModel.appAudioCapture.isRecording || viewModel.isRunning)
+                    .disabled(!viewModel.captureMicrophone || viewModel.captureSourceControlsDisabled)
 
                     Button("Refresh mics") { viewModel.refreshMicrophones() }
-                        .disabled(viewModel.appAudioCapture.isRecording || viewModel.isRunning)
+                        .disabled(viewModel.captureSourceControlsDisabled)
                 }
 
                 if viewModel.isLiveTranscribing || !viewModel.liveTranscript.isEmpty {
