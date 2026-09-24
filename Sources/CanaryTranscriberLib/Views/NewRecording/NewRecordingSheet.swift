@@ -24,7 +24,7 @@ struct NewRecordingSheet: View {
         Group {
             if isExpanded {
                 expandedPanel
-            } else {
+            } else if recordingActive || finishing {
                 compactStatusBar
             }
         }
@@ -57,8 +57,12 @@ struct NewRecordingSheet: View {
                         .foregroundStyle(finishing ? Color.secondary : Color.red)
                 }
                 Button {
-                    withAnimation(.easeInOut(duration: 0.22)) {
-                        isExpanded = false
+                    if recordingActive || finishing {
+                        withAnimation(.easeInOut(duration: 0.22)) {
+                            isExpanded = false
+                        }
+                    } else {
+                        isPresented = false
                     }
                 } label: {
                     Image(systemName: "chevron.down")
@@ -150,6 +154,10 @@ struct NewRecordingSheet: View {
     }
 
     private var compactStatusBar: some View {
+        activeRecordingStatusBar
+    }
+
+    private var activeRecordingStatusBar: some View {
         HStack(spacing: 10) {
             Image(systemName: finishing ? "hourglass" : "record.circle")
                 .foregroundStyle(finishing ? Color.secondary : Color.red)
@@ -198,6 +206,7 @@ struct NewRecordingSheet: View {
         .padding(.horizontal, 10)
         .padding(.top, 8)
     }
+
 
     private var importTab: some View {
         VStack(alignment: .leading, spacing: 8) {
