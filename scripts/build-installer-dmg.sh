@@ -37,14 +37,14 @@ hdiutil create \
 
 hdiutil imageinfo "$DMG_WORK" >/dev/null
 ditto --norsrc --noextattr "$DMG_WORK" "$DMG"
-shasum -a 256 "$DMG" > "$DMG.sha256"
+(cd "$ROOT/dist" && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG.sha256")")
 
 # Also produce a plain zipped .app as a fallback for users who prefer not to use DMG.
 mkdir -p "$ZIP_DIR"
 ditto --norsrc --noextattr "$APP" "$ZIP_DIR/Canary Transcriber.app"
 (cd "$ZIP_DIR" && zip -qry "$ZIP_WORK" "Canary Transcriber.app")
 ditto --norsrc --noextattr "$ZIP_WORK" "$ZIP"
-shasum -a 256 "$ZIP" > "$ZIP.sha256"
+(cd "$ROOT/dist" && shasum -a 256 "$(basename "$ZIP")" > "$(basename "$ZIP.sha256")")
 rm -rf "$BUILD_ROOT"
 
 rm -rf "$DMG_DIR"
