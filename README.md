@@ -2,7 +2,7 @@
 
 A small native macOS SwiftUI app for batch transcription with local MLX speech-to-text profiles.
 
-The latest published release is **[v0.8.7](../../releases/tag/v0.8.7)**. It hides the recording status bar until capture actually starts.
+The latest published release is **[v0.8.8](../../releases/tag/v0.8.8)**. It checks recording permissions at launch and explains how to restore access in macOS settings.
 
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 
