@@ -2,7 +2,7 @@
 
 A small native macOS SwiftUI app for batch transcription with local MLX speech-to-text profiles.
 
-The latest published release is **[v0.8.7](../../releases/tag/v0.8.7)**. It hides the recording status bar until capture actually starts.
+The latest published release is **[v0.8.8](../../releases/tag/v0.8.8)**. It checks recording permissions at launch and explains how to restore access in macOS settings.
 
 ![Canary Transcriber icon](assets/canary-transcriber/CanaryTranscriberIcon-1024.png)
 
@@ -118,7 +118,7 @@ If the DMG path is inconvenient, download `CanaryTranscriber.app.zip`, unzip it,
 2. In **App Audio Capture — ScreenCaptureKit**, click **Refresh apps** and select target application.
 3. Use **Record app audio only** or **Record app audio + microphone** icon button.
 4. Choose a specific **Microphone** device, or leave **System default microphone**.
-5. On first use, allow Canary Transcriber in macOS **System Settings → Privacy & Security → Screen & System Audio Recording** / **Screen Recording** and **Microphone** if prompted.
+5. At launch, Canary checks Microphone and Screen Recording access and asks macOS for any permission it can still request. If access was already denied, macOS will not show the prompt again: use **Open Settings** in the capture panel, enable Canary Transcriber, then restart the app. Ad-hoc signed updates may be treated as a new app by macOS, so recheck access after each update. An authorized microphone can still fail to deliver samples when another app uses the same input; permission checks alone do not prove that a conference recording contains your voice.
 6. Click **Stop recording** when finished.
 7. The app saves app-only `.m4a`, mic-only `.caf`, and mixed `.m4a` artifacts under `~/Documents/CanaryTranscripts/AppAudioCaptures/`; the mixed `conference-audio-*.m4a` is automatically added to the file list.
 8. Click **Transcribe** to process the captured conference audio with the selected MLX profile.

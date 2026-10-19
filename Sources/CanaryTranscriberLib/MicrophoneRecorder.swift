@@ -64,7 +64,9 @@ final class MicrophoneEngineRecorder {
         engine.stop()
         file = nil
 
-        if CaptureFileValidator.isUsableAudioFile(url), recordedFrames >= CaptureFileValidator.minimumMicrophoneFrames {
+        if recordedFrames == 0 {
+            completion(.failure(NSError(domain: "CanaryAppAudioCapture", code: 18, userInfo: [NSLocalizedDescriptionKey: CaptureDiagnostic.microphoneNoSamples.description])))
+        } else if CaptureFileValidator.isUsableAudioFile(url), recordedFrames >= CaptureFileValidator.minimumMicrophoneFrames {
             completion(.success(url))
         } else {
             completion(.failure(NSError(domain: "CanaryAppAudioCapture", code: 18, userInfo: [NSLocalizedDescriptionKey: CaptureDiagnostic.emptyOrTinyFile(url).description])))

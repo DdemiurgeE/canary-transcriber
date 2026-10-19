@@ -4,6 +4,7 @@ import AVFoundation
 public enum CaptureDiagnostic: Equatable, Error, CustomStringConvertible, Sendable {
     case screenRecordingPermissionDenied
     case microphonePermissionDenied
+    case microphoneNoSamples
     case applicationUnavailable(String)
     case microphoneUnavailable(String)
     case emptyOrTinyFile(URL)
@@ -16,6 +17,8 @@ public enum CaptureDiagnostic: Equatable, Error, CustomStringConvertible, Sendab
             return "Screen Recording/System Audio Recording permission is denied. Open System Settings → Privacy & Security → Screen & System Audio Recording and allow Canary Transcriber."
         case .microphonePermissionDenied:
             return "Microphone permission is denied. Open System Settings → Privacy & Security → Microphone and allow Canary Transcriber."
+        case .microphoneNoSamples:
+            return "The recorder received no microphone samples. Verify Canary Transcriber's Microphone access and the selected input; another app may be using the same microphone. Your voice was not saved."
         case .applicationUnavailable(let target):
             return "The selected application is no longer available: \(target). Click Refresh apps and select it again."
         case .microphoneUnavailable(let target):

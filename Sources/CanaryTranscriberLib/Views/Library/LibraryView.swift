@@ -74,9 +74,12 @@ struct LibraryView: View {
         .frame(minWidth: 1000, idealWidth: 1080, maxWidth: .infinity, minHeight: 720, idealHeight: 820, maxHeight: .infinity)
         .onAppear {
             viewModel.bringAppToFront()
-            viewModel.refreshCaptureApps()
             viewModel.refreshMicrophones()
             viewModel.checkDependencies()
+            Task {
+                await viewModel.checkCapturePermissionsOnLaunch()
+                viewModel.refreshCaptureApps()
+            }
         }
     }
 

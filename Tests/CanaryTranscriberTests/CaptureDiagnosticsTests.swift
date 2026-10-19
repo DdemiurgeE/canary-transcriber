@@ -31,6 +31,13 @@ final class CaptureDiagnosticsTests: XCTestCase {
         )
     }
 
+    func testMicrophoneNoSamplesDoesNotClaimPermissionMustBeDenied() {
+        let diagnostic = CaptureDiagnostic.microphoneNoSamples
+        XCTAssertTrue(diagnostic.description.contains("no microphone samples"))
+        XCTAssertTrue(diagnostic.description.contains("another app"))
+        XCTAssertFalse(diagnostic.description.contains("permission is denied"))
+    }
+
     func testPermissionAndDeviceDiagnosticsAreActionableAndEnglish() {
         let messages = [
             CaptureDiagnostic.screenRecordingPermissionDenied.description,

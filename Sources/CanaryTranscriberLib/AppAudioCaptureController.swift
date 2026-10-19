@@ -262,7 +262,7 @@ final class AppAudioCaptureController: NSObject, ObservableObject, SCStreamOutpu
                                 finalResult = .failure(error)
                             }
                         case .failure(let error):
-                            finalResult = .failure(NSError(domain: "CanaryAppAudioCapture", code: 7, userInfo: [NSLocalizedDescriptionKey: "App audio recorded, but microphone did not record: \(error.localizedDescription). Check Microphone permission for Canary Transcriber."]))
+                            finalResult = .failure(NSError(domain: "CanaryAppAudioCapture", code: 7, userInfo: [NSLocalizedDescriptionKey: "App audio recorded, but microphone did not record: \(error.localizedDescription)"]))
                         case .none:
                             finalResult = .failure(NSError(domain: "CanaryAppAudioCapture", code: 8, userInfo: [NSLocalizedDescriptionKey: "Microphone was enabled but the writer returned no result."]))
                         }
