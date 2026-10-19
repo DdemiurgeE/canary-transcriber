@@ -47,6 +47,20 @@ public final class TranscriptionViewModel: ObservableObject {
         reconcileStaleSessions()
     }
 
+    @MainActor
+    func checkCapturePermissionsOnLaunch(using provider: CapturePermissionProviding = SystemCapturePermissions()) async {
+        guard !didCheckCapturePermissions else { return }
+        didCheckCapturePermissions = true
+        let report = await CapturePermissionChecks.checkAtLaunch(using: provider)
+        capturePermissionReport = report
+        if !report.microphoneAuthorized {
+            logs += "⚠️ \(CaptureDiagnostic.microphonePermissionDenied.description)\n"
+        }
+        if !report.screenAuthorized {
+            logs += "⚠️ \(CaptureDiagnostic.screenRecordingPermissionDenied.description)\n"
+        }
+    }
+
     @Published var isRunning = false
     @Published var currentProcessingPath: String?
     @Published var lastProgressLine: String = ""
@@ -74,6 +88,8 @@ public final class TranscriptionViewModel: ObservableObject {
     }
 
     @Published var appAudioCapture = AppAudioCaptureController()
+    @Published var capturePermissionReport: CapturePermissionReport?
+    private var didCheckCapturePermissions = false
     @Published var captureApps: [CaptureAppTarget] = []
     @Published var selectedCaptureAppID: CaptureAppTarget.ID?
     @Published var isRefreshingCaptureApps = false

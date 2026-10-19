@@ -6,6 +6,32 @@ struct AppAudioCaptureView: View {
     var body: some View {
         GroupBox("App Audio Capture — ScreenCaptureKit") {
             VStack(alignment: .leading, spacing: 8) {
+                if let permissions = viewModel.capturePermissionReport {
+                    if !permissions.microphoneAuthorized {
+                        HStack {
+                            Label("Microphone access is off. Enable Canary Transcriber in Privacy & Security → Microphone.", systemImage: "mic.slash")
+                            if let settings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                                Link("Open Settings", destination: settings)
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    }
+                    if !permissions.screenAuthorized {
+                        HStack {
+                            Label("Screen & System Audio Recording access is off. Enable Canary Transcriber in Privacy & Security.", systemImage: "rectangle.slash")
+                            if let settings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                                Link("Open Settings", destination: settings)
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    }
+                } else {
+                    Label("Checking recording permissions…", systemImage: "lock.shield")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if viewModel.isRecordingWhileBatchTranscribing {
                     Label("Recording while the previous batch is transcribed", systemImage: "arrow.triangle.2.circlepath")
                         .font(.caption)
