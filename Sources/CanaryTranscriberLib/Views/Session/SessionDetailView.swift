@@ -27,6 +27,10 @@ struct SessionDetailView: View {
         viewModel.librarySessions.first(where: { $0.id == sessionID })
     }
 
+    static func shouldReloadTranscript(after status: SessionRecord.Status) -> Bool {
+        status == .done || status == .failed
+    }
+
     var body: some View {
         Group {
             if let session {
@@ -112,7 +116,7 @@ struct SessionDetailView: View {
                 transcript = nil
                 loadError = nil
                 plainFallbackText = nil
-            } else if session.status == .done {
+            } else if Self.shouldReloadTranscript(after: session.status) {
                 transcript = nil
                 loadError = nil
                 plainFallbackText = nil

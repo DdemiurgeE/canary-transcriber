@@ -5,7 +5,17 @@ import XCTest
 final class TranscriptionViewModelLibraryTests: XCTestCase {
     private func makeViewModel() -> TranscriptionViewModel {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TranscriptionViewModelLibraryTests-\(UUID().uuidString)", isDirectory: true)
-        return TranscriptionViewModel(libraryStore: SessionLibraryStore(directoryURL: directory))
+        let suite = "CanaryTranscriberTests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        return TranscriptionViewModel(
+            aliasPersistence: SpeakerAliasPersistence(defaults: defaults),
+            libraryStore: SessionLibraryStore(directoryURL: directory),
+            persistentLogURL: directory.appendingPathComponent("test.log")
+        )
     }
 
     func testQueueingTheSamePathTwiceDoesNotDuplicateTheLibraryRow() {
@@ -38,6 +48,48 @@ final class TranscriptionViewModelLibraryTests: XCTestCase {
         XCTAssertEqual(viewModel.diarizationSpeakerCount, "3")
         XCTAssertEqual(viewModel.parsedSpeakerAliases()["SPEAKER_00"], "Alice")
         XCTAssertEqual(viewModel.librarySessions[0].status, .done)
+    }
+
+    func testSuccessfulRerunUsesChosenBatchConfigWithoutChangingNextBatchSettings() throws {
+        let viewModel = makeViewModel()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("CanaryRerun-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("recording.m4a")
+        try Data("fixture".utf8).write(to: source)
+        viewModel.writeNextToSource = false
+        viewModel.outputFolder = directory.path
+        viewModel.pythonPath = "/usr/bin/true" // No MLX or user audio is invoked.
+        viewModel.speakerAliasesText = "SPEAKER_00 = Original"
+        viewModel.queueSession(for: source.path)
+        viewModel.updateSession(path: source.path) { $0.status = .done }
+        let session = try XCTUnwrap(viewModel.librarySessions.first)
+        let settings = PostRecordingRunSettings(
+            profileID: "fast-whisper-turbo", language: "en", chunkDuration: "15",
+            timestamps: true, diarization: true, speakerCount: "3",
+            aliasesText: "SPEAKER_00 = Alice"
+        )
+        viewModel.requeueForTranscription(sessionIDs: [session.id], forceDiarization: false, settings: settings)
+        XCTAssertTrue(viewModel.isRunning)
+        let configPath = try XCTUnwrap(viewModel.currentConfigPath)
+        let config = try JSONDecoder().decode(BatchConfig.self, from: Data(contentsOf: URL(fileURLWithPath: configPath)))
+        XCTAssertEqual(config.profileID, settings.profileID)
+        XCTAssertEqual(config.language, settings.language)
+        XCTAssertEqual(config.chunkDuration, 15)
+        XCTAssertTrue(config.timestamps)
+        XCTAssertTrue(config.diarization)
+        XCTAssertEqual(config.speakerCount, 3)
+        XCTAssertEqual(config.speakerAliases["SPEAKER_00"], "Alice")
+        XCTAssertTrue(config.outputSuffix?.hasPrefix("rerun-") == true)
+        XCTAssertEqual(viewModel.selectedProfileID, "multilingual-canary-v2")
+        XCTAssertEqual(viewModel.language, "ru")
+        XCTAssertFalse(viewModel.diarizationEnabled)
+        XCTAssertEqual(viewModel.speakerAliasesText, "SPEAKER_00 = Original")
+        let deadline = Date().addingTimeInterval(3)
+        while viewModel.isRunning && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTAssertFalse(viewModel.isRunning)
     }
 
     func testQueueRestorationKeepsFilesAddedDuringRerun() {

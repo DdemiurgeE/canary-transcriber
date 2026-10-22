@@ -32,6 +32,7 @@ public final class TranscriptionViewModel: ObservableObject {
     }
 
     let libraryStore: SessionLibraryStore
+    private let persistentLogURL: URL?
     @Published var librarySessions: [SessionRecord] = []
     var activeSessionIDsByPath: [String: SessionRecord.ID] = [:]
     var logStartIndexByPath: [String: String.Index] = [:]
@@ -54,10 +55,15 @@ public final class TranscriptionViewModel: ObservableObject {
         suspendedRerunPaths = []
     }
 
-    public init(aliasPersistence: SpeakerAliasPersistence = SpeakerAliasPersistence(), libraryStore: SessionLibraryStore = SessionLibraryStore()) {
+    public init(
+        aliasPersistence: SpeakerAliasPersistence = SpeakerAliasPersistence(),
+        libraryStore: SessionLibraryStore = SessionLibraryStore(),
+        persistentLogURL: URL? = nil
+    ) {
         self.speakerAliasPersistence = aliasPersistence
         self.speakerAliasesText = aliasPersistence.loadText()
         self.libraryStore = libraryStore
+        self.persistentLogURL = persistentLogURL
         self.librarySessions = libraryStore.load()
         reconcileStaleSessions()
     }
@@ -1397,7 +1403,8 @@ Persistent log: \(persistentLogPath())
     }
 
     func persistentLogPath() -> String {
-        URL(fileURLWithPath: NSHomeDirectory())
+        if let persistentLogURL { return persistentLogURL.path }
+        return URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Documents/CanaryTranscripts/canary-transcriber.log")
             .path
     }

@@ -209,18 +209,18 @@ extension TranscriptionViewModel {
             diarizationEnabled = true
         }
         startBatch(outputSuffix: "rerun-\(UUID().uuidString.lowercased())")
-        if !isRunning {
-            restoreSuspendedQueue()
-            selectedProfileID = previous.profileID
-            runtime = previous.runtime
-            model = previous.model
-            language = previous.language
-            chunkDuration = previous.chunk
-            timestamps = previous.timestamps
-            diarizationEnabled = previous.diarization
-            diarizationSpeakerCount = previous.speakers
-            speakerAliasesText = previous.aliases
-        }
+        if !isRunning { restoreSuspendedQueue() }
+        // startBatch has already encoded its immutable config; don't let this one-off
+        // choice become the default for the next ordinary batch or persist aliases.
+        selectedProfileID = previous.profileID
+        runtime = previous.runtime
+        model = previous.model
+        language = previous.language
+        chunkDuration = previous.chunk
+        timestamps = previous.timestamps
+        diarizationEnabled = previous.diarization
+        diarizationSpeakerCount = previous.speakers
+        speakerAliasesText = previous.aliases
     }
 
     func requeueForDiarization(sessionID: SessionRecord.ID) {
