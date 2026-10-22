@@ -62,7 +62,10 @@ final class TranscriptionViewModelLibraryTests: XCTestCase {
         viewModel.pythonPath = "/usr/bin/true" // No MLX or user audio is invoked.
         viewModel.speakerAliasesText = "SPEAKER_00 = Original"
         viewModel.queueSession(for: source.path)
-        viewModel.updateSession(path: source.path) { $0.status = .done }
+        viewModel.updateSession(path: source.path) {
+            $0.status = .done
+            $0.jsonPath = directory.appendingPathComponent("previous.canary.json").path
+        }
         let session = try XCTUnwrap(viewModel.librarySessions.first)
         let settings = PostRecordingRunSettings(
             profileID: "fast-whisper-turbo", language: "en", chunkDuration: "15",
@@ -90,6 +93,40 @@ final class TranscriptionViewModelLibraryTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
         XCTAssertFalse(viewModel.isRunning)
+        XCTAssertEqual(viewModel.librarySessions.first?.status, .failed)
+        XCTAssertEqual(viewModel.librarySessions.first?.jsonPath, session.jsonPath)
+        XCTAssertFalse(viewModel.logs.contains("✅ Batch completed successfully."))
+    }
+
+    func testExecutableThatCannotLaunchRestoresCompletedSessionAndRemovesConfig() throws {
+        let viewModel = makeViewModel()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("CanaryLaunchFailure-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let source = directory.appendingPathComponent("recording.m4a")
+        try Data("fixture".utf8).write(to: source)
+        let invalidExecutable = directory.appendingPathComponent("invalid-python")
+        try Data("not a program".utf8).write(to: invalidExecutable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: invalidExecutable.path)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: invalidExecutable.path))
+        viewModel.pythonPath = invalidExecutable.path
+        viewModel.writeNextToSource = false
+        viewModel.outputFolder = directory.path
+        viewModel.queueSession(for: source.path)
+        let previousJSON = directory.appendingPathComponent("previous.canary.json").path
+        viewModel.updateSession(path: source.path) {
+            $0.status = .done
+            $0.jsonPath = previousJSON
+        }
+        let session = try XCTUnwrap(viewModel.librarySessions.first)
+        viewModel.requeueForTranscription(
+            sessionIDs: [session.id], forceDiarization: false,
+            settings: viewModel.postRecordingSettings(for: session)
+        )
+        XCTAssertFalse(viewModel.isRunning)
+        XCTAssertEqual(viewModel.librarySessions.first?.status, .done)
+        XCTAssertEqual(viewModel.librarySessions.first?.jsonPath, previousJSON)
+        XCTAssertNil(viewModel.currentConfigPath)
     }
 
     func testQueueRestorationKeepsFilesAddedDuringRerun() {

@@ -1215,16 +1215,27 @@ Persistent log: \(persistentLogPath())
                     DispatchQueue.main.async {
                         self.isRunning = false
                         self.processTask = nil
-                        self.restoreSuspendedQueue()
-                        self.lastBatchResult = self.batchResultAccumulator.finish(
+                        let finalResult = self.batchResultAccumulator.finish(
                             stopped: finished.terminationStatus == 15,
                             fallbackMessage: finished.terminationStatus == 15 ? "Batch stopped by user." : "No completion event was received for this file."
                         )
+                        self.lastBatchResult = finalResult
+                        for file in finalResult?.files ?? [] where file.status != .succeeded {
+                            guard let session = self.librarySessions.first(where: { $0.sourceAudioPath == file.path }),
+                                  session.status == .queued || session.status == .processing else { continue }
+                            self.updateStatus(path: file.path, status: "failed")
+                            self.updateSession(path: file.path) {
+                                $0.status = .failed
+                                $0.errorMessage = file.message ?? "Transcription ended without a completion event."
+                            }
+                        }
+                        self.currentProcessingPath = nil
+                        self.restoreSuspendedQueue()
                         if let currentConfigPath = self.currentConfigPath {
                             try? FileManager.default.removeItem(atPath: currentConfigPath)
                             self.currentConfigPath = nil
                         }
-                        if finished.terminationStatus == 0 {
+                        if finished.terminationStatus == 0 && finalResult?.hasErrors == false {
                             self.logs += "\n✅ Batch completed successfully.\n"
                             self.appendPersistentLog("\n✅ Batch completed successfully.\n")
                         } else if finished.terminationStatus == 15 {
@@ -1248,6 +1259,25 @@ Persistent log: \(persistentLogPath())
             isRunning = false
             processTask = nil
             logs += "❌ Cannot start Python: \(error.localizedDescription)\n"
+            lastBatchResult = batchResultAccumulator.finish(
+                stopped: false, fallbackMessage: "Python could not start: \(error.localizedDescription)"
+            )
+            if suspendedQueuedFiles != nil {
+                // The re-run never began: keep its prior completed record and outputs.
+                for path in config.files { removeQueuedSession(for: path) }
+            } else {
+                for path in config.files {
+                    updateStatus(path: path, status: "failed")
+                    updateSession(path: path) {
+                        $0.status = .failed
+                        $0.errorMessage = "Python could not start: \(error.localizedDescription)"
+                    }
+                }
+            }
+            if let currentConfigPath {
+                try? FileManager.default.removeItem(atPath: currentConfigPath)
+                self.currentConfigPath = nil
+            }
         }
     }
 
