@@ -27,6 +27,35 @@ final class TranscriptionConfigurationTests: XCTestCase {
         )
     }
 
+    func testRerunOutputSuffixEncodesWithoutChangingLegacyConfig() throws {
+        let legacy = makeConfig()
+        XCTAssertNil(legacy.outputSuffix)
+        let rerun = BatchConfig(
+            files: ["/tmp/input.wav"], outputDir: "/tmp/output", writeNextToSource: false,
+            profileID: "multilingual-canary-v2", runtime: "mlx_audio_cli",
+            model: "CogniSoftOrg/canary-1b-v2-mlx-bf16", language: "ru",
+            timestamps: false, chunkDuration: 30, overlapDuration: 2,
+            diarization: false, speakerCount: nil, speakerAliases: [:],
+            outputSuffix: "rerun-a1b2"
+        )
+        let encoded = try JSONEncoder().encode(rerun)
+        XCTAssertEqual(try JSONDecoder().decode(BatchConfig.self, from: encoded).outputSuffix, "rerun-a1b2")
+    }
+
+    func testUnsafeOutputSuffixIsRejected() {
+        let config = BatchConfig(
+            files: ["/tmp/input.wav"], outputDir: "/tmp/output", writeNextToSource: false,
+            profileID: "multilingual-canary-v2", runtime: "mlx_audio_cli",
+            model: "CogniSoftOrg/canary-1b-v2-mlx-bf16", language: "ru",
+            timestamps: false, chunkDuration: 30, overlapDuration: 2,
+            diarization: false, speakerCount: nil, speakerAliases: [:],
+            outputSuffix: "../../bad"
+        )
+        XCTAssertThrowsError(try config.validated()) { error in
+            XCTAssertEqual(error as? BatchConfig.ValidationError, .invalidOutputSuffix)
+        }
+    }
+
     func testCollidingOutputNamesAreRejectedBeforeRunning() {
         XCTAssertThrowsError(try makeConfig(files: ["/tmp/a/meeting.wav", "/tmp/b/meeting.wav"]).validated())
     }

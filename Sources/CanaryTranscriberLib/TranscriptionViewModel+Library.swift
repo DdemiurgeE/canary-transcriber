@@ -187,6 +187,12 @@ extension TranscriptionViewModel {
         guard !isRunning else { return }
         let sessions = librarySessions.filter { sessionIDs.contains($0.id) }
         guard !sessions.isEmpty else { return }
+        let previous = (
+            profileID: selectedProfileID, runtime: runtime, model: model,
+            language: language, chunk: chunkDuration, timestamps: timestamps,
+            diarization: diarizationEnabled, speakers: diarizationSpeakerCount,
+            aliases: speakerAliasesText
+        )
         if let settings {
             guard sessions.count == 1,
                   applyPostRecordingSettings(settings, to: sessions[0].id) else { return }
@@ -194,11 +200,27 @@ extension TranscriptionViewModel {
             selectedProfileID = first.profileID
             applySelectedProfile()
         }
+        suspendedQueuedFiles = files.filter { item in
+            !sessions.contains(where: { $0.sourceAudioPath == item.path })
+        }
+        suspendedRerunPaths = Set(sessions.map(\.sourceAudioPath))
         files = sessions.map { AudioFileItem(path: $0.sourceAudioPath, status: "queued") }
         if forceDiarization {
             diarizationEnabled = true
         }
-        startBatch()
+        startBatch(outputSuffix: "rerun-\(UUID().uuidString.lowercased())")
+        if !isRunning {
+            restoreSuspendedQueue()
+            selectedProfileID = previous.profileID
+            runtime = previous.runtime
+            model = previous.model
+            language = previous.language
+            chunkDuration = previous.chunk
+            timestamps = previous.timestamps
+            diarizationEnabled = previous.diarization
+            diarizationSpeakerCount = previous.speakers
+            speakerAliasesText = previous.aliases
+        }
     }
 
     func requeueForDiarization(sessionID: SessionRecord.ID) {

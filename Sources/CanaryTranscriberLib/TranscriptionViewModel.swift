@@ -38,6 +38,21 @@ public final class TranscriptionViewModel: ObservableObject {
     /// Pre-requeue snapshot of a reused Library row, so cancelling a staged re-run via
     /// `removeQueuedSession` restores the prior state instead of deleting history.
     var revertSnapshots: [String: SessionRecord] = [:]
+    /// Queue temporarily set aside while a single saved recording is reprocessed.
+    var suspendedQueuedFiles: [AudioFileItem]?
+    var suspendedRerunPaths: Set<String> = []
+
+    func restoreSuspendedQueue() {
+        guard let suspendedQueuedFiles else { return }
+        // Preserve files added while the re-run was processing; only remove its own items.
+        let laterAdditions = files.filter { item in
+            !suspendedRerunPaths.contains(item.path)
+                && !suspendedQueuedFiles.contains(where: { $0.path == item.path })
+        }
+        files = suspendedQueuedFiles + laterAdditions
+        self.suspendedQueuedFiles = nil
+        suspendedRerunPaths = []
+    }
 
     public init(aliasPersistence: SpeakerAliasPersistence = SpeakerAliasPersistence(), libraryStore: SessionLibraryStore = SessionLibraryStore()) {
         self.speakerAliasPersistence = aliasPersistence
@@ -344,7 +359,7 @@ public final class TranscriptionViewModel: ObservableObject {
 
     func addAudioPaths(_ rawPaths: [String], source: String) {
         let fm = FileManager.default
-        let existing = Set(files.map { $0.path })
+        let existing = Set(files.map { $0.path }).union(suspendedQueuedFiles?.map { $0.path } ?? [])
         var additions: [AudioFileItem] = []
         var skippedDirectories = 0
         var skippedDuplicates = 0
@@ -412,7 +427,7 @@ public final class TranscriptionViewModel: ObservableObject {
         self.selectedFileID = nil
     }
 
-    func startBatch() {
+    func startBatch(outputSuffix: String? = nil) {
         guard !isRunning else { return }
 
         let cleanPython = normalizeUserPath(pythonPath)
@@ -475,7 +490,8 @@ public final class TranscriptionViewModel: ObservableObject {
             overlapDuration: chunk <= 0 ? 0 : 2.0,
             diarization: diarizationEnabled,
             speakerCount: diarizationEnabled ? forcedSpeakerCount : nil,
-            speakerAliases: diarizationEnabled ? parsedSpeakerAliases() : [:]
+            speakerAliases: diarizationEnabled ? parsedSpeakerAliases() : [:],
+            outputSuffix: outputSuffix
         )
         do {
             _ = try config.validated()
@@ -591,9 +607,19 @@ try:
         stem = audio_path.stem
         date_prefix = datetime.now().strftime("%Y-%m-%d")
         dated_stem = stem if stem.startswith(f"{date_prefix}-") else f"{date_prefix}-{stem}"
+        # A re-run writes a separate set of outputs, preserving the previous transcript
+        # even if the new MLX/diarization pass fails partway through.
+        output_suffix = cfg.get("outputSuffix")
+        if output_suffix:
+            dated_stem = f"{dated_stem}-{output_suffix}"
         md_dir = markdown_output_dir if markdown_output_dir is not None else base_dir
         md_dir.mkdir(parents=True, exist_ok=True)
         return base_dir / f"{dated_stem}.canary.txt", base_dir / f"{dated_stem}.canary.json", md_dir / f"{dated_stem}.canary.md"
+
+    # Fixture mode exercises the real output naming logic without audio/MLX.
+    if cfg.get("_outputPathFixture"):
+        print(json.dumps([str(path) for path in output_paths(Path(cfg["_outputPathFixture"]))]), flush=True)
+        raise SystemExit(0)
 
     def resolve_ffmpeg():
         candidates = [
@@ -1183,6 +1209,7 @@ Persistent log: \(persistentLogPath())
                     DispatchQueue.main.async {
                         self.isRunning = false
                         self.processTask = nil
+                        self.restoreSuspendedQueue()
                         self.lastBatchResult = self.batchResultAccumulator.finish(
                             stopped: finished.terminationStatus == 15,
                             fallbackMessage: finished.terminationStatus == 15 ? "Batch stopped by user." : "No completion event was received for this file."

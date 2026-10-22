@@ -40,6 +40,39 @@ final class TranscriptionViewModelLibraryTests: XCTestCase {
         XCTAssertEqual(viewModel.librarySessions[0].status, .done)
     }
 
+    func testQueueRestorationKeepsFilesAddedDuringRerun() {
+        let viewModel = makeViewModel()
+        viewModel.suspendedQueuedFiles = [AudioFileItem(path: "/tmp/queued.m4a")]
+        viewModel.suspendedRerunPaths = ["/tmp/rerun.m4a"]
+        viewModel.files = [
+            AudioFileItem(path: "/tmp/rerun.m4a"),
+            AudioFileItem(path: "/tmp/new-during-run.m4a")
+        ]
+        viewModel.restoreSuspendedQueue()
+        XCTAssertEqual(viewModel.files.map(\.path), ["/tmp/queued.m4a", "/tmp/new-during-run.m4a"])
+        XCTAssertNil(viewModel.suspendedQueuedFiles)
+    }
+
+    func testFailedPostRecordingRerunPreservesOtherQueuedFiles() {
+        let viewModel = makeViewModel()
+        viewModel.queueSession(for: "/tmp/previously-transcribed.m4a")
+        viewModel.updateSession(path: "/tmp/previously-transcribed.m4a") { $0.status = .done }
+        let doneID = viewModel.librarySessions[0].id
+        viewModel.files = [AudioFileItem(path: "/tmp/newly-recorded.m4a")]
+        viewModel.queueSession(for: "/tmp/newly-recorded.m4a")
+        viewModel.pythonPath = "/no/such/python"
+        var settings = viewModel.postRecordingSettings(for: viewModel.librarySessions[0])
+        settings.profileID = "fast-whisper-turbo"
+        settings.language = "en"
+        viewModel.requeueForTranscription(
+            sessionIDs: [doneID], forceDiarization: false, settings: settings
+        )
+        XCTAssertEqual(viewModel.files.map(\.path), ["/tmp/newly-recorded.m4a"])
+        XCTAssertEqual(viewModel.librarySessions.first(where: { $0.id == doneID })?.status, .done)
+        XCTAssertEqual(viewModel.selectedProfileID, "multilingual-canary-v2")
+        XCTAssertEqual(viewModel.language, "ru")
+    }
+
     func testPostRecordingDraftValidationRejectsInvalidChunkAndSpeakers() {
         var settings = PostRecordingRunSettings(
             profileID: "multilingual-canary-v2", language: "ru", chunkDuration: "15",

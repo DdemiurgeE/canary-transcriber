@@ -311,10 +311,14 @@ private struct SessionRow: View {
             .disabled(viewModel.isRunning)
             .popover(isPresented: $showingDiarizationPrompt) {
                 DiarizationRunPrompt(language: $draftLanguage, speakerCount: $draftSpeakerCount, aliasesText: $draftAliases) {
-                    viewModel.language = draftLanguage
-                    viewModel.diarizationSpeakerCount = draftSpeakerCount
-                    viewModel.speakerAliasesText = draftAliases
-                    viewModel.requeueForTranscription(sessionIDs: [session.id], forceDiarization: true)
+                    var settings = viewModel.postRecordingSettings(for: session)
+                    settings.language = draftLanguage
+                    settings.speakerCount = draftSpeakerCount
+                    settings.aliasesText = draftAliases
+                    settings.diarization = true
+                    viewModel.requeueForTranscription(
+                        sessionIDs: [session.id], forceDiarization: false, settings: settings
+                    )
                     showingDiarizationPrompt = false
                 }
             }

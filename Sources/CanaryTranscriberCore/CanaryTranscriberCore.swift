@@ -17,6 +17,8 @@ public struct BatchConfig: Codable {
     public let diarization: Bool
     public let speakerCount: Int?
     public let speakerAliases: [String: String]
+    /// A unique suffix for a saved session's re-run; nil preserves historical output names.
+    public let outputSuffix: String?
 
     public init(
         files: [String],
@@ -32,7 +34,8 @@ public struct BatchConfig: Codable {
         overlapDuration: Double,
         diarization: Bool,
         speakerCount: Int?,
-        speakerAliases: [String: String]
+        speakerAliases: [String: String],
+        outputSuffix: String? = nil
     ) {
         self.files = files
         self.outputDir = outputDir
@@ -48,6 +51,7 @@ public struct BatchConfig: Codable {
         self.diarization = diarization
         self.speakerCount = speakerCount
         self.speakerAliases = speakerAliases
+        self.outputSuffix = outputSuffix
     }
 }
 
