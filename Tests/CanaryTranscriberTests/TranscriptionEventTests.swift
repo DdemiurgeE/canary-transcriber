@@ -87,6 +87,48 @@ final class TranscriptionEventTests: XCTestCase {
         XCTAssertTrue(output.contains("\"kind\": \"future_kind\""), output)
     }
 
+    func testRerunWritesDistinctOutputPathsWithoutOverwritingOriginal() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CanaryTranscriberLib/TranscriptionViewModel.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "let script = #\"\"\"")).upperBound
+        let end = try XCTUnwrap(source.range(of: "\"\"\"#", range: start..<source.endIndex)).lowerBound
+        let script = String(source[start..<end])
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("canary-output-fixture-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func paths(suffix: String?) throws -> [String] {
+            let configURL = directory.appendingPathComponent("config.json")
+            var config: [String: Any] = [
+                "files": [], "outputDir": directory.path, "writeNextToSource": false,
+                "_outputPathFixture": directory.appendingPathComponent("meeting.m4a").path
+            ]
+            if let suffix { config["outputSuffix"] = suffix }
+            try JSONSerialization.data(withJSONObject: config).write(to: configURL)
+            let process = Process()
+            let pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+            process.arguments = ["-u", "-c", script, configURL.path]
+            process.standardOutput = pipe
+            process.standardError = pipe
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            XCTAssertEqual(process.terminationStatus, 0, String(data: data, encoding: .utf8) ?? "")
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String])
+        }
+
+        let original = try paths(suffix: nil)
+        let rerun = try paths(suffix: "rerun-a1b2")
+        XCTAssertEqual(original.count, 3)
+        XCTAssertEqual(rerun.count, 3)
+        XCTAssertNotEqual(original, rerun)
+        XCTAssertTrue(rerun.allSatisfy { $0.contains("-rerun-a1b2.canary.") })
+    }
+
     func testMalformedEventProducesDiagnostic() {
         XCTAssertThrowsError(try TranscriptionEventParser.parse("CANARY_EVENT not-json")) { error in
             XCTAssertEqual(error as? TranscriptionEventParser.ParseError, .invalidJSON)

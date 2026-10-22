@@ -8,6 +8,11 @@ struct DiarizationRunPrompt: View {
     @Binding var aliasesText: String
     var onRun: () -> Void
 
+    private var validSpeakerCount: Bool {
+        let count = speakerCount.trimmingCharacters(in: .whitespacesAndNewlines)
+        return count.isEmpty || count.lowercased() == "auto" || (Int(count).map { $0 > 0 } ?? false)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Run diarization")
@@ -48,6 +53,8 @@ struct DiarizationRunPrompt: View {
                 Spacer()
                 Button("Run", action: onRun)
                     .buttonStyle(.borderedProminent)
+                    .disabled(language.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || !validSpeakerCount)
             }
         }
         .padding(16)

@@ -242,6 +242,8 @@ private struct SessionRow: View {
     var liveProgress: String?
 
     @State private var showingDiarizationPrompt = false
+    @State private var showingTranscriptionSettings = false
+    @State private var runSettings: PostRecordingRunSettings
     @State private var draftLanguage: String
     @State private var draftSpeakerCount: String
     @State private var draftAliases: String
@@ -250,6 +252,7 @@ private struct SessionRow: View {
         self.viewModel = viewModel
         self.session = session
         self.liveProgress = liveProgress
+        _runSettings = State(initialValue: viewModel.postRecordingSettings(for: session))
         _draftLanguage = State(initialValue: session.language)
         _draftSpeakerCount = State(initialValue: session.speakerCount.map(String.init) ?? "auto")
         _draftAliases = State(initialValue: viewModel.speakerAliasesText)
@@ -308,18 +311,31 @@ private struct SessionRow: View {
             .disabled(viewModel.isRunning)
             .popover(isPresented: $showingDiarizationPrompt) {
                 DiarizationRunPrompt(language: $draftLanguage, speakerCount: $draftSpeakerCount, aliasesText: $draftAliases) {
-                    viewModel.language = draftLanguage
-                    viewModel.diarizationSpeakerCount = draftSpeakerCount
-                    viewModel.speakerAliasesText = draftAliases
-                    viewModel.requeueForTranscription(sessionIDs: [session.id], forceDiarization: true)
+                    var settings = viewModel.postRecordingSettings(for: session)
+                    settings.language = draftLanguage
+                    settings.speakerCount = draftSpeakerCount
+                    settings.aliasesText = draftAliases
+                    settings.diarization = true
+                    viewModel.requeueForTranscription(
+                        sessionIDs: [session.id], forceDiarization: false, settings: settings
+                    )
                     showingDiarizationPrompt = false
                 }
             }
 
-            actionButton("Transcribe") {
-                viewModel.requeueForTranscription(sessionIDs: [session.id], forceDiarization: false)
+            actionButton("Transcribe…") {
+                runSettings = viewModel.postRecordingSettings(for: session)
+                showingTranscriptionSettings = true
             }
             .disabled(viewModel.isRunning)
+            .popover(isPresented: $showingTranscriptionSettings) {
+                PostRecordingRunPrompt(settings: $runSettings, profiles: viewModel.profiles) {
+                    viewModel.requeueForTranscription(
+                        sessionIDs: [session.id], forceDiarization: false, settings: runSettings
+                    )
+                    showingTranscriptionSettings = false
+                }
+            }
 
             actionButton("Stop") {
                 viewModel.stopBatch()

@@ -9,6 +9,7 @@ public extension BatchConfig {
         case invalidOverlapDuration
         case nonFiniteOverlapDuration
         case invalidSpeakerCount
+        case invalidOutputSuffix
         case emptyProfileID
         case emptyRuntime
         case emptyModel
@@ -32,6 +33,8 @@ public extension BatchConfig {
                 return "Overlap duration must be a finite number."
             case .invalidSpeakerCount:
                 return "Speaker count must be greater than zero."
+            case .invalidOutputSuffix:
+                return "Output suffix must contain only letters, digits, or hyphens."
             case .emptyProfileID:
                 return "Profile ID cannot be empty."
             case .emptyRuntime:
@@ -84,6 +87,13 @@ public extension BatchConfig {
 
         if let speakerCount {
             guard speakerCount > 0 else { throw ValidationError.invalidSpeakerCount }
+        }
+        if let outputSuffix {
+            let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-")
+            guard !outputSuffix.isEmpty,
+                  outputSuffix.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+                throw ValidationError.invalidOutputSuffix
+            }
         }
 
         try validateOutputDestinations()

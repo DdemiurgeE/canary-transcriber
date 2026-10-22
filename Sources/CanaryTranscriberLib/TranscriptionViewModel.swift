@@ -32,17 +32,38 @@ public final class TranscriptionViewModel: ObservableObject {
     }
 
     let libraryStore: SessionLibraryStore
+    private let persistentLogURL: URL?
     @Published var librarySessions: [SessionRecord] = []
     var activeSessionIDsByPath: [String: SessionRecord.ID] = [:]
     var logStartIndexByPath: [String: String.Index] = [:]
     /// Pre-requeue snapshot of a reused Library row, so cancelling a staged re-run via
     /// `removeQueuedSession` restores the prior state instead of deleting history.
     var revertSnapshots: [String: SessionRecord] = [:]
+    /// Queue temporarily set aside while a single saved recording is reprocessed.
+    var suspendedQueuedFiles: [AudioFileItem]?
+    var suspendedRerunPaths: Set<String> = []
 
-    public init(aliasPersistence: SpeakerAliasPersistence = SpeakerAliasPersistence(), libraryStore: SessionLibraryStore = SessionLibraryStore()) {
+    func restoreSuspendedQueue() {
+        guard let suspendedQueuedFiles else { return }
+        // Preserve files added while the re-run was processing; only remove its own items.
+        let laterAdditions = files.filter { item in
+            !suspendedRerunPaths.contains(item.path)
+                && !suspendedQueuedFiles.contains(where: { $0.path == item.path })
+        }
+        files = suspendedQueuedFiles + laterAdditions
+        self.suspendedQueuedFiles = nil
+        suspendedRerunPaths = []
+    }
+
+    public init(
+        aliasPersistence: SpeakerAliasPersistence = SpeakerAliasPersistence(),
+        libraryStore: SessionLibraryStore = SessionLibraryStore(),
+        persistentLogURL: URL? = nil
+    ) {
         self.speakerAliasPersistence = aliasPersistence
         self.speakerAliasesText = aliasPersistence.loadText()
         self.libraryStore = libraryStore
+        self.persistentLogURL = persistentLogURL
         self.librarySessions = libraryStore.load()
         reconcileStaleSessions()
     }
@@ -344,7 +365,7 @@ public final class TranscriptionViewModel: ObservableObject {
 
     func addAudioPaths(_ rawPaths: [String], source: String) {
         let fm = FileManager.default
-        let existing = Set(files.map { $0.path })
+        let existing = Set(files.map { $0.path }).union(suspendedQueuedFiles?.map { $0.path } ?? [])
         var additions: [AudioFileItem] = []
         var skippedDirectories = 0
         var skippedDuplicates = 0
@@ -412,7 +433,7 @@ public final class TranscriptionViewModel: ObservableObject {
         self.selectedFileID = nil
     }
 
-    func startBatch() {
+    func startBatch(outputSuffix: String? = nil) {
         guard !isRunning else { return }
 
         let cleanPython = normalizeUserPath(pythonPath)
@@ -475,7 +496,8 @@ public final class TranscriptionViewModel: ObservableObject {
             overlapDuration: chunk <= 0 ? 0 : 2.0,
             diarization: diarizationEnabled,
             speakerCount: diarizationEnabled ? forcedSpeakerCount : nil,
-            speakerAliases: diarizationEnabled ? parsedSpeakerAliases() : [:]
+            speakerAliases: diarizationEnabled ? parsedSpeakerAliases() : [:],
+            outputSuffix: outputSuffix
         )
         do {
             _ = try config.validated()
@@ -591,9 +613,19 @@ try:
         stem = audio_path.stem
         date_prefix = datetime.now().strftime("%Y-%m-%d")
         dated_stem = stem if stem.startswith(f"{date_prefix}-") else f"{date_prefix}-{stem}"
+        # A re-run writes a separate set of outputs, preserving the previous transcript
+        # even if the new MLX/diarization pass fails partway through.
+        output_suffix = cfg.get("outputSuffix")
+        if output_suffix:
+            dated_stem = f"{dated_stem}-{output_suffix}"
         md_dir = markdown_output_dir if markdown_output_dir is not None else base_dir
         md_dir.mkdir(parents=True, exist_ok=True)
         return base_dir / f"{dated_stem}.canary.txt", base_dir / f"{dated_stem}.canary.json", md_dir / f"{dated_stem}.canary.md"
+
+    # Fixture mode exercises the real output naming logic without audio/MLX.
+    if cfg.get("_outputPathFixture"):
+        print(json.dumps([str(path) for path in output_paths(Path(cfg["_outputPathFixture"]))]), flush=True)
+        raise SystemExit(0)
 
     def resolve_ffmpeg():
         candidates = [
@@ -1183,15 +1215,27 @@ Persistent log: \(persistentLogPath())
                     DispatchQueue.main.async {
                         self.isRunning = false
                         self.processTask = nil
-                        self.lastBatchResult = self.batchResultAccumulator.finish(
+                        let finalResult = self.batchResultAccumulator.finish(
                             stopped: finished.terminationStatus == 15,
                             fallbackMessage: finished.terminationStatus == 15 ? "Batch stopped by user." : "No completion event was received for this file."
                         )
+                        self.lastBatchResult = finalResult
+                        for file in finalResult?.files ?? [] where file.status != .succeeded {
+                            guard let session = self.librarySessions.first(where: { $0.sourceAudioPath == file.path }),
+                                  session.status == .queued || session.status == .processing else { continue }
+                            self.updateStatus(path: file.path, status: "failed")
+                            self.updateSession(path: file.path) {
+                                $0.status = .failed
+                                $0.errorMessage = file.message ?? "Transcription ended without a completion event."
+                            }
+                        }
+                        self.currentProcessingPath = nil
+                        self.restoreSuspendedQueue()
                         if let currentConfigPath = self.currentConfigPath {
                             try? FileManager.default.removeItem(atPath: currentConfigPath)
                             self.currentConfigPath = nil
                         }
-                        if finished.terminationStatus == 0 {
+                        if finished.terminationStatus == 0 && finalResult?.hasErrors == false {
                             self.logs += "\n✅ Batch completed successfully.\n"
                             self.appendPersistentLog("\n✅ Batch completed successfully.\n")
                         } else if finished.terminationStatus == 15 {
@@ -1215,6 +1259,25 @@ Persistent log: \(persistentLogPath())
             isRunning = false
             processTask = nil
             logs += "❌ Cannot start Python: \(error.localizedDescription)\n"
+            lastBatchResult = batchResultAccumulator.finish(
+                stopped: false, fallbackMessage: "Python could not start: \(error.localizedDescription)"
+            )
+            if suspendedQueuedFiles != nil {
+                // The re-run never began: keep its prior completed record and outputs.
+                for path in config.files { removeQueuedSession(for: path) }
+            } else {
+                for path in config.files {
+                    updateStatus(path: path, status: "failed")
+                    updateSession(path: path) {
+                        $0.status = .failed
+                        $0.errorMessage = "Python could not start: \(error.localizedDescription)"
+                    }
+                }
+            }
+            if let currentConfigPath {
+                try? FileManager.default.removeItem(atPath: currentConfigPath)
+                self.currentConfigPath = nil
+            }
         }
     }
 
@@ -1370,7 +1433,8 @@ Persistent log: \(persistentLogPath())
     }
 
     func persistentLogPath() -> String {
-        URL(fileURLWithPath: NSHomeDirectory())
+        if let persistentLogURL { return persistentLogURL.path }
+        return URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Documents/CanaryTranscripts/canary-transcriber.log")
             .path
     }

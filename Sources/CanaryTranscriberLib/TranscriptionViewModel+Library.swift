@@ -2,9 +2,58 @@ import Foundation
 import AppKit
 import CanaryTranscriberCore
 
+/// Options chosen for a particular saved recording, independently of the settings used
+/// while capturing it. The draft is not applied until the user explicitly starts a run.
+struct PostRecordingRunSettings {
+    var profileID: String
+    var language: String
+    var chunkDuration: String
+    var timestamps: Bool
+    var diarization: Bool
+    var speakerCount: String
+    var aliasesText: String
+
+    var isValid: Bool {
+        let chunk = chunkDuration.trimmingCharacters(in: .whitespacesAndNewlines)
+        let speakers = speakerCount.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !language.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (chunk.isEmpty || (Double(chunk).map { $0.isFinite && $0 > 2 } ?? false))
+            && (!diarization || speakers.isEmpty || speakers.lowercased() == "auto"
+                || (Int(speakers).map { $0 > 0 } ?? false))
+    }
+}
+
 /// Session library bookkeeping split out of TranscriptionViewModel.swift to keep that
 /// file under SwiftLint's type_body_length limit.
 extension TranscriptionViewModel {
+    func postRecordingSettings(for session: SessionRecord) -> PostRecordingRunSettings {
+        PostRecordingRunSettings(
+            profileID: session.profileID, language: session.language,
+            chunkDuration: chunkDuration, timestamps: timestamps,
+            diarization: session.diarizationEnabled,
+            speakerCount: session.speakerCount.map(String.init) ?? "auto",
+            aliasesText: speakerAliasesText
+        )
+    }
+
+    @discardableResult
+    func applyPostRecordingSettings(_ settings: PostRecordingRunSettings, to sessionID: SessionRecord.ID) -> Bool {
+        guard !isRunning, librarySessions.contains(where: { $0.id == sessionID }),
+              let profile = profiles.first(where: { $0.id == settings.profileID }),
+              settings.isValid else { return false }
+        selectedProfileID = profile.id
+        runtime = profile.runtime
+        model = profile.model
+        language = settings.language.trimmingCharacters(in: .whitespacesAndNewlines)
+        chunkDuration = settings.chunkDuration.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? profile.chunkDuration : settings.chunkDuration.trimmingCharacters(in: .whitespacesAndNewlines)
+        timestamps = settings.timestamps
+        diarizationEnabled = settings.diarization
+        let count = settings.speakerCount.trimmingCharacters(in: .whitespacesAndNewlines)
+        diarizationSpeakerCount = count.isEmpty ? "auto" : count
+        speakerAliasesText = settings.aliasesText
+        return true
+    }
     /// Called as soon as a file is staged (picker, drop, or a finished app-audio recording)
     /// so it shows up in the Library immediately, not only once Transcribe is pressed.
     func queueSession(for path: String) {
@@ -131,19 +180,47 @@ extension TranscriptionViewModel {
 
     /// Re-queues one or more existing sessions for a fresh run, using the first session's
     /// profile for the whole batch (a run only ever has one active profile/config).
-    func requeueForTranscription(sessionIDs: [SessionRecord.ID], forceDiarization: Bool) {
+    func requeueForTranscription(
+        sessionIDs: [SessionRecord.ID], forceDiarization: Bool,
+        settings: PostRecordingRunSettings? = nil
+    ) {
         guard !isRunning else { return }
         let sessions = librarySessions.filter { sessionIDs.contains($0.id) }
         guard !sessions.isEmpty else { return }
-        files = sessions.map { AudioFileItem(path: $0.sourceAudioPath, status: "queued") }
-        if let first = sessions.first {
+        let previous = (
+            profileID: selectedProfileID, runtime: runtime, model: model,
+            language: language, chunk: chunkDuration, timestamps: timestamps,
+            diarization: diarizationEnabled, speakers: diarizationSpeakerCount,
+            aliases: speakerAliasesText
+        )
+        if let settings {
+            guard sessions.count == 1,
+                  applyPostRecordingSettings(settings, to: sessions[0].id) else { return }
+        } else if let first = sessions.first {
             selectedProfileID = first.profileID
             applySelectedProfile()
         }
+        suspendedQueuedFiles = files.filter { item in
+            !sessions.contains(where: { $0.sourceAudioPath == item.path })
+        }
+        suspendedRerunPaths = Set(sessions.map(\.sourceAudioPath))
+        files = sessions.map { AudioFileItem(path: $0.sourceAudioPath, status: "queued") }
         if forceDiarization {
             diarizationEnabled = true
         }
-        startBatch()
+        startBatch(outputSuffix: "rerun-\(UUID().uuidString.lowercased())")
+        if !isRunning { restoreSuspendedQueue() }
+        // startBatch has already encoded its immutable config; don't let this one-off
+        // choice become the default for the next ordinary batch or persist aliases.
+        selectedProfileID = previous.profileID
+        runtime = previous.runtime
+        model = previous.model
+        language = previous.language
+        chunkDuration = previous.chunk
+        timestamps = previous.timestamps
+        diarizationEnabled = previous.diarization
+        diarizationSpeakerCount = previous.speakers
+        speakerAliasesText = previous.aliases
     }
 
     func requeueForDiarization(sessionID: SessionRecord.ID) {

@@ -13,6 +13,11 @@ struct SessionDetailView: View {
     @State private var renamingSpeaker: String?
     @State private var aliasDraft: String = ""
     @State private var showingDiarizationPrompt = false
+    @State private var showingTranscriptionSettings = false
+    @State private var runSettings = PostRecordingRunSettings(
+        profileID: "", language: "ru", chunkDuration: "30", timestamps: false,
+        diarization: false, speakerCount: "auto", aliasesText: ""
+    )
     @State private var draftLanguage: String = ""
     @State private var draftSpeakerCount: String = ""
     @State private var draftAliases: String = ""
@@ -20,6 +25,10 @@ struct SessionDetailView: View {
 
     private var session: SessionRecord? {
         viewModel.librarySessions.first(where: { $0.id == sessionID })
+    }
+
+    static func shouldReloadTranscript(after status: SessionRecord.Status) -> Bool {
+        status == .done || status == .failed
     }
 
     var body: some View {
@@ -62,6 +71,19 @@ struct SessionDetailView: View {
                 if session.status == .processing {
                     Button("Stop", role: .destructive) { viewModel.stopBatch() }
                 } else {
+                    Button("Transcribe…") {
+                        runSettings = viewModel.postRecordingSettings(for: session)
+                        showingTranscriptionSettings = true
+                    }
+                    .disabled(viewModel.isRunning)
+                    .popover(isPresented: $showingTranscriptionSettings) {
+                        PostRecordingRunPrompt(settings: $runSettings, profiles: viewModel.profiles) {
+                            viewModel.requeueForTranscription(
+                                sessionIDs: [session.id], forceDiarization: false, settings: runSettings
+                            )
+                            showingTranscriptionSettings = false
+                        }
+                    }
                     Button("Re-run diarization") {
                         draftLanguage = session.language
                         draftSpeakerCount = session.speakerCount.map(String.init) ?? "auto"
@@ -71,10 +93,14 @@ struct SessionDetailView: View {
                     .disabled(viewModel.isRunning)
                     .popover(isPresented: $showingDiarizationPrompt) {
                         DiarizationRunPrompt(language: $draftLanguage, speakerCount: $draftSpeakerCount, aliasesText: $draftAliases) {
-                            viewModel.language = draftLanguage
-                            viewModel.diarizationSpeakerCount = draftSpeakerCount
-                            viewModel.speakerAliasesText = draftAliases
-                            viewModel.requeueForTranscription(sessionIDs: [session.id], forceDiarization: true)
+                            var settings = viewModel.postRecordingSettings(for: session)
+                            settings.language = draftLanguage
+                            settings.speakerCount = draftSpeakerCount
+                            settings.aliasesText = draftAliases
+                            settings.diarization = true
+                            viewModel.requeueForTranscription(
+                                sessionIDs: [session.id], forceDiarization: false, settings: settings
+                            )
                             showingDiarizationPrompt = false
                         }
                     }
@@ -85,6 +111,18 @@ struct SessionDetailView: View {
             }
         }
         .onAppear { loadTranscriptIfNeeded(session) }
+        .onChange(of: session.status) {
+            if session.status == .queued || session.status == .processing {
+                transcript = nil
+                loadError = nil
+                plainFallbackText = nil
+            } else if Self.shouldReloadTranscript(after: session.status) {
+                transcript = nil
+                loadError = nil
+                plainFallbackText = nil
+                loadTranscriptIfNeeded(session)
+            }
+        }
         .onChange(of: session.jsonPath) {
             transcript = nil
             loadError = nil
@@ -139,8 +177,9 @@ struct SessionDetailView: View {
         } else if let loadError {
             VStack(alignment: .leading, spacing: 8) {
                 Text(loadError).foregroundStyle(.secondary)
-                Button("Re-transcribe") {
-                    viewModel.requeueForTranscription(sessionIDs: [session.id], forceDiarization: session.diarizationEnabled)
+                Button("Transcribe…") {
+                    runSettings = viewModel.postRecordingSettings(for: session)
+                    showingTranscriptionSettings = true
                 }
             }
         } else if session.status == .processing || session.status == .queued {
@@ -222,6 +261,7 @@ struct SessionDetailView: View {
     }
 
     private func loadTranscriptIfNeeded(_ session: SessionRecord) {
+        guard session.status == .done || session.status == .failed else { return }
         guard transcript == nil, loadError == nil, plainFallbackText == nil else { return }
         guard let jsonPath = session.jsonPath else {
             loadPlainFallback(session)
