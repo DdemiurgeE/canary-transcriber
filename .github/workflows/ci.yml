@@ -21,6 +21,8 @@ jobs:
         run: swift test
       - name: Validate embedded runtime and event fixture
         run: ./scripts/smoke-test-runtime.sh
+      - name: Run embedded Python regression tests
+        run: python3 -m unittest discover -s Tests/Python -v
       - name: Check patch whitespace
         run: git diff --check
       - name: Build SwiftPM product

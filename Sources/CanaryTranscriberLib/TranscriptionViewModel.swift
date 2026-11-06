@@ -744,7 +744,7 @@ try:
             model_obj = gigaam.load_model(model_name, device=device_name)
             print("Stage: GigaAM model loaded", flush=True)
 
-            def transcribe(path):
+            def transcribe_short(path):
                 try:
                     import warnings
                     with warnings.catch_warnings():
@@ -760,6 +760,36 @@ try:
                 finally:
                     if device_name == "mps":
                         torch.mps.empty_cache()
+
+            def transcribe(path):
+                # GigaAM's short-file API rejects audio longer than 25s.
+                # Bound input here (not just in the fixed chunk planner), so
+                # speaker segments and chunkDuration=null are safe as well.
+                # Use PCM frame slices to avoid gaps/overlap and extra gated
+                # VAD dependencies required by transcribe_longform().
+                with wave.open(str(path), "rb") as source:
+                    params = source.getparams()
+                    max_frames = 20 * source.getframerate()
+                    if source.getnframes() <= max_frames:
+                        return transcribe_short(path)
+                    count = (source.getnframes() + max_frames - 1) // max_frames
+                    # Balance parts so a 20s multiple plus a few frames does
+                    # not create a tail too short for GigaAM's STFT padding.
+                    part_frames, extra_frames = divmod(source.getnframes(), count)
+                    print(f"Stage: GigaAM splitting input into {count} parts (max 20s)", flush=True)
+                    texts = []
+                    with tempfile.TemporaryDirectory(prefix="gigaam-parts-") as directory:
+                        part_path = Path(directory) / "part.wav"
+                        for part_index in range(count):
+                            frames = source.readframes(part_frames + (part_index < extra_frames))
+                            with wave.open(str(part_path), "wb") as part:
+                                part.setparams(params)
+                                part.writeframes(frames)
+                            print(f"Stage: GigaAM part {part_index + 1}/{count}", flush=True)
+                            text = transcribe_short(part_path).strip()
+                            if text:
+                                texts.append(text)
+                    return "\n".join(texts)
             return transcribe
 
         if runtime_name == "mlx_audio_cli":
